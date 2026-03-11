@@ -1,0 +1,82 @@
+[
+  {
+    "id": "a1b2c3d4-1111-4000-8000-000000000001",
+    "position": 1,
+    "filepath": "src/pages/slides/TitleSlide.tsx",
+    "title": "Constellation by Synozur",
+    "description": "Title slide with hero image introducing the Synozur Consulting Delivery Platform",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-2222-4000-8000-000000000002",
+    "position": 2,
+    "filepath": "src/pages/slides/ProblemSlide.tsx",
+    "title": "The Problem",
+    "description": "Consulting firms struggle with scattered tools, revenue leakage, and zero visibility",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-3333-4000-8000-000000000003",
+    "position": 3,
+    "filepath": "src/pages/slides/PlatformOverviewSlide.tsx",
+    "title": "Platform Overview",
+    "description": "One platform covering Estimate, Deliver, Invoice, and Analyze",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-4444-4000-8000-000000000004",
+    "position": 4,
+    "filepath": "src/pages/slides/EstimateScopeSlide.tsx",
+    "title": "Estimate & Scope Management",
+    "description": "Precision pricing with role-based rates, phase structures, and estimate-to-project flow",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-5555-4000-8000-000000000005",
+    "position": 5,
+    "filepath": "src/pages/slides/ProjectDeliverySlide.tsx",
+    "title": "Project Delivery",
+    "description": "Real-time dashboards, portfolio timeline, RAIDD logs, and resource management",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-6666-4000-8000-000000000006",
+    "position": 6,
+    "filepath": "src/pages/slides/TimeExpensesSlide.tsx",
+    "title": "Time, Expenses & Approvals",
+    "description": "Frictionless time and expense tracking with multi-level approval workflows",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-7777-4000-8000-000000000007",
+    "position": 7,
+    "filepath": "src/pages/slides/InvoicingSlide.tsx",
+    "title": "Automated Invoicing",
+    "description": "Three-step invoice generation from batch selection to delivery and tracking",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-8888-4000-8000-000000000008",
+    "position": 8,
+    "filepath": "src/pages/slides/AIIntegrationSlide.tsx",
+    "title": "AI + Microsoft 365 Integration",
+    "description": "AI-powered insights, smart receipt processing, Outlook and SharePoint integration",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-9999-4000-8000-000000000009",
+    "position": 9,
+    "filepath": "src/pages/slides/SecuritySlide.tsx",
+    "title": "Security & Multi-Tenancy",
+    "description": "Enterprise-grade security with SSO, data isolation, RBAC, and platform administration",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a1b2c3d4-aaaa-4000-8000-00000000000a",
+    "position": 10,
+    "filepath": "src/pages/slides/ClosingSlide.tsx",
+    "title": "Get Started with Constellation",
+    "description": "Closing CTA with contact information and tagline",
+    "speakerNotes": ""
+  }
+]
