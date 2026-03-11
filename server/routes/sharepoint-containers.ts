@@ -1668,7 +1668,7 @@ export function registerSharePointContainerRoutes(
 
   app.post("/api/admin/create-container", deps.requireAuth, deps.requireRole(["admin"]), async (req, res) => {
     try {
-      const { containerName, description } = req.body;
+      const { containerName, description, saveToTenant = true } = req.body;
       
       if (!containerName) {
         return res.status(400).json({
@@ -1683,17 +1683,40 @@ export function registerSharePointContainerRoutes(
       const creator = new ContainerCreator();
       const result = await creator.createContainer(containerName, description);
       
-      if (result.success) {
+      if (result.success && result.containerId) {
+        const isProduction = process.env.REPLIT_DEPLOYMENT === '1';
+        const tenantId = (req as any).user?.tenantId;
+        let savedToTenant = false;
+
+        if (saveToTenant && tenantId) {
+          try {
+            await storage.updateTenantSpeConfig(tenantId, {
+              ...(isProduction
+                ? { speContainerIdProd: result.containerId }
+                : { speContainerIdDev: result.containerId }),
+              speStorageEnabled: true,
+            });
+            savedToTenant = true;
+            console.log(`[CONTAINER_CREATOR] Saved container ${result.containerId} to tenant ${tenantId} (${isProduction ? 'prod' : 'dev'})`);
+          } catch (dbErr) {
+            console.warn("[CONTAINER_CREATOR] Failed to save container ID to tenant DB:", dbErr);
+          }
+        }
+
         res.status(200).json({
           success: true,
           message: result.message,
           containerId: result.containerId,
           details: result.details,
-          nextSteps: [
-            `Set SHAREPOINT_CONTAINER_ID_DEV or SHAREPOINT_CONTAINER_ID_PROD to: ${result.containerId}`,
-            "Restart the application to use the new container",
-            "Test file uploads to verify the container is working"
-          ]
+          savedToTenant,
+          environment: isProduction ? 'production' : 'development',
+          nextSteps: savedToTenant
+            ? ["SPE storage has been enabled for your tenant", "Test file uploads to verify the container is working"]
+            : [
+                `Set SHAREPOINT_CONTAINER_ID_${isProduction ? 'PROD' : 'DEV'} to: ${result.containerId}`,
+                "Or use the 'Save Container ID' panel below to save it to your tenant",
+                "Restart the application to use the new container",
+              ],
         });
       } else {
         res.status(500).json({
@@ -1708,6 +1731,62 @@ export function registerSharePointContainerRoutes(
         success: false,
         message: error instanceof Error ? error.message : "Unknown error during container creation"
       });
+    }
+  });
+
+  app.get("/api/admin/tenant-spe-config", deps.requireAuth, deps.requireRole(["admin"]), async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenantId;
+      if (!tenantId) return res.status(400).json({ message: "No tenant associated with this user" });
+      const config = await storage.getTenantSpeConfig(tenantId);
+      const isProduction = process.env.REPLIT_DEPLOYMENT === '1';
+      res.json({
+        tenantId,
+        environment: isProduction ? 'production' : 'development',
+        speStorageEnabled: config?.speStorageEnabled ?? false,
+        speContainerIdDev: config?.speContainerIdDev ?? null,
+        speContainerIdProd: config?.speContainerIdProd ?? null,
+        activeContainerId: isProduction ? (config?.speContainerIdProd ?? null) : (config?.speContainerIdDev ?? null),
+      });
+    } catch (error) {
+      console.error("[SPE_CONFIG] Error fetching tenant SPE config:", error);
+      res.status(500).json({ message: "Failed to fetch SPE configuration" });
+    }
+  });
+
+  app.post("/api/admin/tenant-spe-config", deps.requireAuth, deps.requireRole(["admin"]), async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenantId;
+      if (!tenantId) return res.status(400).json({ message: "No tenant associated with this user" });
+      const { containerId, speStorageEnabled, environment } = req.body;
+      const isProduction = environment === 'production' || process.env.REPLIT_DEPLOYMENT === '1';
+
+      const updates: { speContainerIdDev?: string | null; speContainerIdProd?: string | null; speStorageEnabled?: boolean } = {};
+      if (containerId !== undefined) {
+        if (isProduction) updates.speContainerIdProd = containerId || null;
+        else updates.speContainerIdDev = containerId || null;
+      }
+      if (speStorageEnabled !== undefined) {
+        updates.speStorageEnabled = speStorageEnabled === true;
+      }
+
+      await storage.updateTenantSpeConfig(tenantId, updates);
+      console.log(`[SPE_CONFIG] Updated tenant ${tenantId} SPE config:`, updates);
+
+      const updated = await storage.getTenantSpeConfig(tenantId);
+      const env = process.env.REPLIT_DEPLOYMENT === '1' ? 'production' : 'development';
+      res.json({
+        success: true,
+        tenantId,
+        environment: env,
+        speStorageEnabled: updated?.speStorageEnabled ?? false,
+        speContainerIdDev: updated?.speContainerIdDev ?? null,
+        speContainerIdProd: updated?.speContainerIdProd ?? null,
+        activeContainerId: env === 'production' ? (updated?.speContainerIdProd ?? null) : (updated?.speContainerIdDev ?? null),
+      });
+    } catch (error) {
+      console.error("[SPE_CONFIG] Error updating tenant SPE config:", error);
+      res.status(500).json({ message: "Failed to update SPE configuration" });
     }
   });
 
