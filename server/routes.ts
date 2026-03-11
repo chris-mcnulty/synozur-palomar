@@ -221,14 +221,24 @@ export async function registerRoutes(app: Express): Promise<void> {
           uploadedAt: new Date(), uploadedBy: uploadedBy
         };
       }
-      const businessDocTypes = ['invoice', 'contract', 'receipt'];
+      const businessDocTypes = ['invoice', 'contract', 'receipt', 'report'];
       const useLocalStorage = !isProductionEnv && !speEnabled && businessDocTypes.includes(documentType);
       if (useLocalStorage) {
         const result = await localFileStorageInstance.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId);
         return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},LOCAL_STORAGE` : 'LOCAL_STORAGE' } };
       }
-      const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
-      return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
+      if (speEnabled) {
+        const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
+        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
+      }
+      try {
+        const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
+        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
+      } catch (speErr) {
+        console.warn(`[SMART_STORAGE] SharePoint upload failed, falling back to local:`, speErr instanceof Error ? speErr.message : speErr);
+        const result = await localFileStorageInstance.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId);
+        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},LOCAL_STORAGE` : 'LOCAL_STORAGE' } };
+      }
     },
     async getFileContent(fileId: string, tenantId?: string) {
       try { const buffer = await receiptStorage.getReceipt(fileId); return { buffer, metadata: {} }; }
@@ -4168,7 +4178,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
     }
   });
 
-  // Delete a saved status report
+  // Delete a saved status report (also cleans up stored PPTX file)
   app.delete("/api/projects/:projectId/status-reports/:reportId", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
       const { projectId, reportId } = req.params;
@@ -4178,11 +4188,46 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
       if (user.tenantId && existing.tenantId && existing.tenantId !== user.tenantId) {
         return res.status(404).json({ message: "Status report not found" });
       }
+      if (existing.speFileId) {
+        try {
+          await sharePointFileStorage.deleteFile(existing.speFileId, existing.tenantId || undefined);
+          console.log(`[STATUS-REPORTS] Deleted stored PPTX file: ${existing.speFileId}`);
+        } catch (fileErr: any) {
+          console.warn(`[STATUS-REPORTS] Failed to delete stored file ${existing.speFileId}:`, fileErr.message);
+        }
+      }
       await storage.deleteStatusReport(reportId);
       res.json({ success: true });
     } catch (error: any) {
       console.error("[STATUS-REPORTS] Failed to delete status report:", error);
       res.status(500).json({ message: "Failed to delete status report" });
+    }
+  });
+
+  // Download a saved PPTX status report
+  app.get("/api/projects/:projectId/status-reports/:reportId/download", requireAuth, async (req, res) => {
+    try {
+      const { projectId, reportId } = req.params;
+      const user = req.user as any;
+      const report = await storage.getStatusReport(reportId);
+      if (!report || report.projectId !== projectId) return res.status(404).json({ message: "Status report not found" });
+      if (user.tenantId && report.tenantId && report.tenantId !== user.tenantId) {
+        return res.status(404).json({ message: "Status report not found" });
+      }
+      if (!report.speFileId) {
+        return res.status(404).json({ message: "No stored PPTX file for this report" });
+      }
+      const fileData = await smartFileStorage.downloadFileDirect(report.speFileId, report.tenantId || undefined);
+      if (!fileData) {
+        return res.status(404).json({ message: "PPTX file not found in storage" });
+      }
+      const pptxFileName = (report.metadata as any)?.pptxFileName || `${report.title.replace(/[^a-z0-9]/gi, '_')}.pptx`;
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+      res.setHeader("Content-Disposition", `attachment; filename="${pptxFileName}"`);
+      res.send(fileData.buffer);
+    } catch (error: any) {
+      console.error("[STATUS-REPORTS] Failed to download PPTX:", error);
+      res.status(500).json({ message: "Failed to download report" });
     }
   });
 
@@ -8272,6 +8317,30 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
           }
         })();
 
+        let savedFileId: string | null = null;
+        try {
+          const pptxBuffer = fsNode.readFileSync(tmpFile);
+          const storedFile = await smartFileStorage.storeFile(
+            pptxBuffer,
+            filename,
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            {
+              documentType: 'report',
+              projectId: project.id,
+              projectCode: project.projectCode || project.name,
+              createdByUserId: req.user!.id,
+              metadataVersion: 1,
+            },
+            req.user!.id,
+            undefined,
+            tenantId || undefined
+          );
+          savedFileId = storedFile.id;
+          console.log(`[PPTX] File saved to storage: ${savedFileId}`);
+        } catch (storeErr: any) {
+          console.error("[PPTX] Failed to save PPTX to storage (will still stream to user):", storeErr.message);
+        }
+
         try {
           await storage.createStatusReport({
             projectId: req.params.id,
@@ -8283,6 +8352,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
             periodEnd: effectiveEndDate,
             reportContent: aiReport || null,
             status: "final",
+            speFileId: savedFileId,
             metadata: {
               projectName: project.name,
               clientName: project.client?.name || "Unknown",
@@ -8291,6 +8361,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
               style: reportStyle,
               generatedAt: new Date().toISOString(),
               generatedBy: req.user!.name || req.user!.email,
+              pptxFileName: filename,
             },
             generatedBy: req.user!.id,
           });
