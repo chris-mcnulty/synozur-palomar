@@ -301,7 +301,7 @@ export default function Login() {
                     </Button>
                   </form>
                   
-                  {!isDevelopment && (ssoStatus as any)?.configured === true && (
+                  {(ssoStatus as any)?.configured === true && (
                     <>
                       <div className="relative my-4">
                         <div className="absolute inset-0 flex items-center">
@@ -342,14 +342,12 @@ export default function Login() {
                     </>
                   )}
                   
-                  {!isDevelopment && (
-                    <p className="text-center text-sm text-gray-500 mt-4">
-                      {(ssoStatus as any)?.configured === true
-                        ? "Use your corporate Microsoft account to sign in"
-                        : "For production SSO, configure Azure AD environment variables"
-                      }
-                    </p>
-                  )}
+                  <p className="text-center text-sm text-gray-500 mt-4">
+                    {(ssoStatus as any)?.configured === true
+                      ? "Use your corporate Microsoft account to sign in"
+                      : "For production SSO, configure Azure AD environment variables"
+                    }
+                  </p>
 
                   <div className="mt-4 pt-4 border-t border-white/10 text-center">
                     <p className="text-sm text-gray-500">

@@ -177,14 +177,20 @@ const getBaseUrl = () => {
     return `${url.protocol}//${url.host}`;
   }
   
-  // For Replit deployments
+  // For Replit deployments (production)
+  if (process.env.REPLIT_DEPLOYMENT === '1') {
+    return 'https://constellation.synozur.com';
+  }
+
+  // For Replit dev environment — use the actual dev domain
+  if (process.env.REPLIT_DOMAINS) {
+    const devDomain = process.env.REPLIT_DOMAINS.split(',')[0];
+    return `https://${devDomain}`;
+  }
+
+  // Legacy Replit format
   if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
     return `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
-  }
-  
-  // For production domains (always use HTTPS)
-  if (process.env.NODE_ENV === 'production' || process.env.REPLIT_DOMAINS) {
-    return 'https://constellation.synozur.com';
   }
   
   // Only use HTTP for local development
