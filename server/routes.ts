@@ -12541,11 +12541,23 @@ Return a JSON response:
           category: category || undefined,
           tenantId: effectiveTenantId,
         });
-        return res.json(tickets);
+        const userIds = [...new Set(tickets.map(t => t.userId))];
+        const usersMap = new Map<string, { id: string; firstName: string | null; lastName: string | null; email: string | null }>();
+        for (const uid of userIds) {
+          const u = await storage.getUser(uid);
+          if (u) usersMap.set(uid, { id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email });
+        }
+        const enriched = tickets.map(t => ({
+          ...t,
+          author: usersMap.get(t.userId) || null,
+        }));
+        return res.json(enriched);
       }
 
       const tickets = await storage.getSupportTicketsByUserId(user.id);
-      return res.json(tickets);
+      const userInfo = { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email };
+      const enrichedTickets = tickets.map(t => ({ ...t, author: userInfo }));
+      return res.json(enrichedTickets);
     } catch (error) {
       console.error("Error fetching support tickets:", error);
       return res.status(500).json({ error: "Failed to fetch support tickets" });
