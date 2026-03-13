@@ -51,6 +51,7 @@ Multi-tenant user model: A user in one tenant can be a client in another tenant,
 - **Expense Approval Workflow**: Comprehensive system with finite state machine and role-based access.
 - **Resource Management**: Dual List/Timeline views, capacity planning, and conflict detection.
 - **Microsoft Planner Integration**: Bidirectional sync of project assignments with Microsoft Planner tasks.
+- **Embeddable Project Pages**: Project detail pages support `?embedded=true` query parameter to strip navigation chrome (header, sidebar, help chat). Embed code dialog on project detail generates iframe snippets with configurable tab, width, and height. Works with Teams tabs, SharePoint web parts, and any iframe host.
 - **Scheduled Jobs**: Background system for reminders and Planner sync.
 - **Financial Reporting**: Comprehensive reports on revenue, cost, profit, and margins.
 - **Contractor Expense Invoices**: Contractors can generate invoices from expense reports.
