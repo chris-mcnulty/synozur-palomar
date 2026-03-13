@@ -11531,7 +11531,7 @@ IMPORTANT: Always respond with valid JSON only. No text outside the JSON object.
     }
   });
 
-  app.post("/api/projects/:id/raidd/import", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+  app.post("/api/projects/:id/raidd/import", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -12024,7 +12024,7 @@ Provide a JSON response with:
     }
   });
 
-  app.post("/api/raidd/ai/ingest-text", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+  app.post("/api/raidd/ai/ingest-text", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
       const { text, projectContext } = req.body;
       if (!text) {
@@ -12103,7 +12103,7 @@ Only include fields relevant to each item type. Be specific and actionable.`;
     }
   });
 
-  app.post("/api/raidd/ai/extract-decisions", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+  app.post("/api/raidd/ai/extract-decisions", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
       const { text, projectContext } = req.body;
       if (!text) {
