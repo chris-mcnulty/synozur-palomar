@@ -1,7 +1,7 @@
 # Constellation Product Backlog
 
-**Last Updated**: March 10, 2026
-**Version**: 5.0 — Added Copilot Agent, Persistent Status Reports, MCP Server v1.7 items.
+**Last Updated**: March 13, 2026
+**Version**: 5.1 — Added Michelle Boyd scheduling requests (start date shifts, task date cascading).
 
 ---
 
@@ -293,6 +293,27 @@
 - [ ] Missing entry detection
 - [ ] Persist view preferences per user
 
+### Project Start Date Shifts Task Assignments
+**Status:** Ready for Implementation
+**Effort:** Low (3-5 days)
+**Requested by:** Michelle Boyd
+
+- [ ] When a project's start date is changed, automatically shift all task assignment dates by the same offset
+- [ ] Preview shift impact before applying
+- [ ] Option to opt out individual tasks from the shift
+
+### Task Assignment Date Edits Cascade to Subsequent Tasks
+**Status:** Design Required
+**Effort:** Medium (1-2 weeks)
+**Requested by:** Michelle Boyd
+
+> **Design Note:** This request presumes all subsequent tasks have dependencies on the edited task, which isn't always true. Needs design work to determine how to identify which downstream tasks should actually shift (e.g., only linked/dependent tasks vs. all tasks after the edited date).
+
+- [ ] When a task assignment date is edited, shift subsequent task dates by the same delta
+- [ ] Define dependency model to determine which tasks are "subsequent" vs. independent
+- [ ] Preview cascade impact before applying
+- [ ] Undo/rollback support for cascaded changes
+
 ---
 
 ## 🤖 P3 - AI & AUTOMATION
@@ -406,7 +427,7 @@
 | Priority | Items | Est. Effort |
 |----------|-------|-------------|
 | P1 - High | 4 items | 24-32 weeks |
-| P2 - Important | 9 items | 20-30 weeks |
+| P2 - Important | 11 items | 21-33 weeks |
 | P3 - AI/Automation | 2 items | 11-16 weeks |
 | P4 - Platform | 7 items | 34+ weeks |
 
