@@ -177,7 +177,7 @@
 - [x] Database schema for Teams/Channels/Planner ✅
 - [ ] Automatic Team creation for new clients
 - [ ] Channel creation for subsequent projects
-- [ ] SharePoint site provisioning with Team
+- [ ] SharePoint site provisioning with Team (capture and store site URL per client — required by status report news page publishing)
 - [ ] Team member management (add/remove from assignments)
 - [ ] Planner Phase 2: Bidirectional sync via Graph webhooks
 - [ ] Project creation UI with M365 options
@@ -314,6 +314,7 @@
 
 **Future Enhancements (not yet started):**
 - [ ] SPE file storage for PPTX reports (currently saved to DB only)
+- [ ] Publish status reports as SharePoint news pages on the client's Team site (opt-in per report; requires client SharePoint site URL — see M365 Teams Integration)
 - [ ] Bulk delete option for cleaning up older drafts
 - [ ] Auto-archive reports older than N months
 - [ ] Scheduled automatic report generation and email delivery
