@@ -98,6 +98,15 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
   })();
 
+  // Seed system default folder templates for Teams channels (non-blocking)
+  (async () => {
+    try {
+      await storage.seedSystemFolderDefaults();
+    } catch (err: any) {
+      console.error("[M365] Failed to seed folder templates:", err.message);
+    }
+  })();
+
   // Register authentication routes first
   registerAuthRoutes(app);
   
@@ -1118,6 +1127,8 @@ export async function registerRoutes(app: Express): Promise<void> {
         speMigrationStartedAt: tenant.speMigrationStartedAt,
         adminConsentGranted: tenant.adminConsentGranted ?? false,
         azureTenantId: tenant.azureTenantId || null,
+        m365AutoProvisionTeams: tenant.m365AutoProvisionTeams ?? false,
+        m365DefaultTeamTemplate: tenant.m365DefaultTeamTemplate ?? 'standard',
         serverEnvironment: (process.env.REPLIT_DEPLOYMENT === '1' || process.env.NODE_ENV === 'production') ? 'production' : 'development',
       });
     } catch (error: any) {
@@ -3573,6 +3584,183 @@ export async function registerRoutes(app: Express): Promise<void> {
     } catch (error: any) {
       console.error("[PLANNER] Failed to clear cache:", error);
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ============ M365 Teams Integration Settings ============
+
+  // Get folder templates (effective = tenant overrides or system defaults)
+  app.get("/api/tenant/settings/m365/folder-templates", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const tenantId = user?.primaryTenantId;
+      const systemDefaults = await storage.getFolderTemplates('system');
+      const tenantOverrides = tenantId ? await storage.getFolderTemplates('tenant', tenantId) : [];
+      const effective = await storage.getEffectiveFolderTemplates(tenantId);
+
+      res.json({
+        systemDefaults: systemDefaults.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder })),
+        tenantOverrides: tenantOverrides.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder })),
+        effective: effective.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder, scope: t.scope })),
+        isUsingDefaults: tenantOverrides.length === 0,
+      });
+    } catch (error: any) {
+      console.error("[M365] Failed to fetch folder templates:", error);
+      res.status(500).json({ message: "Failed to fetch folder templates" });
+    }
+  });
+
+  // Update tenant folder templates
+  app.put("/api/tenant/settings/m365/folder-templates", requireAuth, requireRole(["admin", "owner"]), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const tenantId = user?.primaryTenantId;
+
+      if (!tenantId) {
+        return res.status(400).json({ message: "No tenant associated with user" });
+      }
+
+      const schema = z.object({
+        folders: z.array(z.object({
+          folderName: z.string().min(1).max(255),
+          sortOrder: z.number().int().min(0),
+        })),
+        resetToDefaults: z.boolean().optional(),
+      });
+
+      const parsed = schema.parse(req.body);
+
+      if (parsed.resetToDefaults) {
+        await storage.upsertTenantFolderTemplates(tenantId, []);
+      } else {
+        await storage.upsertTenantFolderTemplates(tenantId, parsed.folders);
+      }
+
+      const effective = await storage.getEffectiveFolderTemplates(tenantId);
+      const tenantOverrides = await storage.getFolderTemplates('tenant', tenantId);
+
+      res.json({
+        effective: effective.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder, scope: t.scope })),
+        isUsingDefaults: tenantOverrides.length === 0,
+      });
+    } catch (error: any) {
+      console.error("[M365] Failed to update folder templates:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid folder template data", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update folder templates" });
+    }
+  });
+
+  // Update M365 Teams settings (auto-provision toggle, template)
+  app.patch("/api/tenant/settings/m365", requireAuth, requireRole(["admin", "owner"]), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const tenantId = user?.primaryTenantId;
+
+      if (!tenantId) {
+        return res.status(400).json({ message: "No tenant associated with user" });
+      }
+
+      const validTemplates = ['standard', 'educationClass', 'educationStaff', 'educationPLC'] as const;
+      const schema = z.object({
+        m365AutoProvisionTeams: z.boolean().optional(),
+        m365DefaultTeamTemplate: z.enum(validTemplates).optional(),
+      });
+
+      const parsed = schema.parse(req.body);
+      const updateData: Partial<{ m365AutoProvisionTeams: boolean; m365DefaultTeamTemplate: string }> = {};
+
+      if (parsed.m365AutoProvisionTeams !== undefined) {
+        updateData.m365AutoProvisionTeams = parsed.m365AutoProvisionTeams;
+      }
+      if (parsed.m365DefaultTeamTemplate !== undefined) {
+        updateData.m365DefaultTeamTemplate = parsed.m365DefaultTeamTemplate;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await storage.updateTenant(tenantId, updateData);
+      }
+
+      const tenant = await storage.getTenant(tenantId);
+      res.json({
+        m365AutoProvisionTeams: tenant?.m365AutoProvisionTeams ?? false,
+        m365DefaultTeamTemplate: tenant?.m365DefaultTeamTemplate ?? 'standard',
+      });
+    } catch (error: unknown) {
+      console.error("[M365] Failed to update M365 settings:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid settings data", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update M365 settings" });
+    }
+  });
+
+  // Test M365 connection (Graph API permissions check)
+  app.post("/api/tenant/settings/m365/test-connection", requireAuth, requireRole(["admin", "owner"]), async (req, res) => {
+    try {
+      const { plannerService } = await import('./services/planner-service');
+      const connectionResult = await plannerService.testConnection();
+
+      const permissions: string[] = [];
+      if (connectionResult.success) {
+        permissions.push('Graph API Access');
+      }
+
+      let teamTemplatesAvailable = false;
+      try {
+        const templates = await plannerService.listTeamTemplates();
+        if (templates.length > 0) {
+          teamTemplatesAvailable = true;
+          permissions.push('Team Templates');
+        }
+      } catch {
+        // Team templates permission not available
+      }
+
+      res.json({
+        success: connectionResult.success,
+        permissions,
+        teamTemplatesAvailable,
+        message: connectionResult.success
+          ? `Connected successfully. Verified ${permissions.length} permission(s).`
+          : 'Connection failed. Please verify your Microsoft Graph configuration.',
+        error: connectionResult.success ? undefined : connectionResult.error,
+      });
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error("[M365] Connection test failed:", errMsg);
+      res.status(500).json({
+        success: false,
+        permissions: [],
+        message: 'Connection test failed',
+        error: errMsg,
+      });
+    }
+  });
+
+  // Get client team mapping
+  app.get("/api/clients/:id/team", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const tenantId = user?.primaryTenantId;
+
+      const client = await storage.getClient(req.params.id);
+      if (!client) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+      if (tenantId && client.tenantId && client.tenantId !== tenantId) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+
+      const clientTeam = await storage.getClientTeam(req.params.id);
+      if (!clientTeam) {
+        return res.status(404).json({ message: "No team mapping found for this client" });
+      }
+      res.json(clientTeam);
+    } catch (error: any) {
+      console.error("[M365] Failed to fetch client team:", error);
+      res.status(500).json({ message: "Failed to fetch client team" });
     }
   });
 

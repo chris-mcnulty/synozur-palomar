@@ -8,6 +8,7 @@ import {
   containerTypes, clientContainers, containerPermissions, containerColumns, metadataTemplates, documentMetadata,
   expenseReports, expenseReportItems, reimbursementBatches, reimbursementLineItems,
   projectPlannerConnections, plannerTaskSync, userAzureMappings, plannerWebhookSubscriptions, plannerSyncLogs,
+  clientTeams, projectChannels, teamsFolderTemplates, DEFAULT_FOLDER_TEMPLATES,
   type User, type InsertUser, type Client, type InsertClient, 
   type Project, type InsertProject, type Role, type InsertRole,
   type Estimate, type InsertEstimate, type EstimateLineItem, type InsertEstimateLineItem, type EstimateLineItemWithJoins,
@@ -53,6 +54,9 @@ import {
   type PlannerWebhookSubscription, type InsertPlannerWebhookSubscription,
   type PlannerSyncLog, type InsertPlannerSyncLog,
   type UserAzureMapping, type InsertUserAzureMapping,
+  type ClientTeam, type InsertClientTeam,
+  type ProjectChannel, type InsertProjectChannel,
+  type TeamsFolderTemplate, type InsertTeamsFolderTemplate,
   type Tenant,
   type VocabularyTerms, DEFAULT_VOCABULARY,
   scheduledJobRuns, type ScheduledJobRun, type InsertScheduledJobRun,
@@ -1147,6 +1151,26 @@ export interface IStorage {
   createAiUsageAlert(alert: InsertAiUsageAlert): Promise<AiUsageAlert>;
   getAiUsageAlerts(periodMonth?: string): Promise<AiUsageAlert[]>;
   getPlatformAdminEmails(): Promise<string[]>;
+
+  // Client Teams
+  getClientTeam(clientId: string): Promise<ClientTeam | undefined>;
+  getClientTeams(tenantId: string): Promise<ClientTeam[]>;
+  createClientTeam(data: InsertClientTeam): Promise<ClientTeam>;
+  updateClientTeam(id: string, data: Partial<InsertClientTeam>): Promise<ClientTeam>;
+  deleteClientTeam(id: string): Promise<void>;
+
+  // Project Channels
+  getProjectChannel(projectId: string): Promise<ProjectChannel | undefined>;
+  getProjectChannels(tenantId: string): Promise<ProjectChannel[]>;
+  createProjectChannel(data: InsertProjectChannel): Promise<ProjectChannel>;
+  updateProjectChannel(id: string, data: Partial<InsertProjectChannel>): Promise<ProjectChannel>;
+  deleteProjectChannel(id: string): Promise<void>;
+
+  // Teams Folder Templates
+  getFolderTemplates(scope: 'system' | 'tenant', tenantId?: string): Promise<TeamsFolderTemplate[]>;
+  getEffectiveFolderTemplates(tenantId?: string): Promise<TeamsFolderTemplate[]>;
+  upsertTenantFolderTemplates(tenantId: string, folders: { folderName: string; sortOrder: number }[]): Promise<TeamsFolderTemplate[]>;
+  seedSystemFolderDefaults(): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -12305,6 +12329,133 @@ export class DatabaseStorage implements IStorage {
         isNotNull(users.email),
       ));
     return admins.map(a => a.email).filter(Boolean) as string[];
+  }
+
+  // ============ Client Teams ============
+
+  async getClientTeam(clientId: string): Promise<ClientTeam | undefined> {
+    const [result] = await db.select().from(clientTeams).where(eq(clientTeams.clientId, clientId));
+    return result || undefined;
+  }
+
+  async getClientTeams(tenantId: string): Promise<ClientTeam[]> {
+    return db.select().from(clientTeams).where(eq(clientTeams.tenantId, tenantId));
+  }
+
+  async createClientTeam(data: InsertClientTeam): Promise<ClientTeam> {
+    const [result] = await db.insert(clientTeams).values(data).returning();
+    return result;
+  }
+
+  async updateClientTeam(id: string, data: Partial<InsertClientTeam>): Promise<ClientTeam> {
+    const [result] = await db.update(clientTeams)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(clientTeams.id, id))
+      .returning();
+    return result;
+  }
+
+  async deleteClientTeam(id: string): Promise<void> {
+    await db.delete(clientTeams).where(eq(clientTeams.id, id));
+  }
+
+  // ============ Project Channels ============
+
+  async getProjectChannel(projectId: string): Promise<ProjectChannel | undefined> {
+    const [result] = await db.select().from(projectChannels).where(eq(projectChannels.projectId, projectId));
+    return result || undefined;
+  }
+
+  async getProjectChannels(tenantId: string): Promise<ProjectChannel[]> {
+    return db.select().from(projectChannels).where(eq(projectChannels.tenantId, tenantId));
+  }
+
+  async createProjectChannel(data: InsertProjectChannel): Promise<ProjectChannel> {
+    const [result] = await db.insert(projectChannels).values(data).returning();
+    return result;
+  }
+
+  async updateProjectChannel(id: string, data: Partial<InsertProjectChannel>): Promise<ProjectChannel> {
+    const [result] = await db.update(projectChannels)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(projectChannels.id, id))
+      .returning();
+    return result;
+  }
+
+  async deleteProjectChannel(id: string): Promise<void> {
+    await db.delete(projectChannels).where(eq(projectChannels.id, id));
+  }
+
+  // ============ Teams Folder Templates ============
+
+  async getFolderTemplates(scope: 'system' | 'tenant', tenantId?: string): Promise<TeamsFolderTemplate[]> {
+    if (scope === 'tenant' && tenantId) {
+      return db.select().from(teamsFolderTemplates)
+        .where(and(
+          eq(teamsFolderTemplates.tenantId, tenantId),
+          eq(teamsFolderTemplates.scope, 'tenant'),
+          eq(teamsFolderTemplates.isActive, true),
+        ))
+        .orderBy(teamsFolderTemplates.sortOrder);
+    }
+    return db.select().from(teamsFolderTemplates)
+      .where(and(
+        eq(teamsFolderTemplates.scope, 'system'),
+        eq(teamsFolderTemplates.isActive, true),
+      ))
+      .orderBy(teamsFolderTemplates.sortOrder);
+  }
+
+  async getEffectiveFolderTemplates(tenantId?: string): Promise<TeamsFolderTemplate[]> {
+    if (tenantId) {
+      const tenantTemplates = await this.getFolderTemplates('tenant', tenantId);
+      if (tenantTemplates.length > 0) {
+        return tenantTemplates;
+      }
+    }
+    return this.getFolderTemplates('system');
+  }
+
+  async upsertTenantFolderTemplates(tenantId: string, folders: { folderName: string; sortOrder: number }[]): Promise<TeamsFolderTemplate[]> {
+    await db.delete(teamsFolderTemplates)
+      .where(and(
+        eq(teamsFolderTemplates.tenantId, tenantId),
+        eq(teamsFolderTemplates.scope, 'tenant'),
+      ));
+
+    if (folders.length === 0) {
+      return [];
+    }
+
+    const values = folders.map(f => ({
+      tenantId,
+      folderName: f.folderName,
+      sortOrder: f.sortOrder,
+      scope: 'tenant' as const,
+      isActive: true,
+    }));
+
+    return db.insert(teamsFolderTemplates).values(values).returning();
+  }
+
+  async seedSystemFolderDefaults(): Promise<void> {
+    const existing = await db.select().from(teamsFolderTemplates)
+      .where(eq(teamsFolderTemplates.scope, 'system'));
+
+    if (existing.length > 0) {
+      return;
+    }
+
+    const values = DEFAULT_FOLDER_TEMPLATES.map((name, idx) => ({
+      folderName: name,
+      sortOrder: idx,
+      scope: 'system' as const,
+      isActive: true,
+    }));
+
+    await db.insert(teamsFolderTemplates).values(values);
+    console.log('[STORAGE] Seeded system default folder templates:', DEFAULT_FOLDER_TEMPLATES.join(', '));
   }
 }
 
