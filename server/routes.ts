@@ -98,15 +98,6 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
   })();
 
-  // Seed system default folder templates for Teams channels (non-blocking)
-  (async () => {
-    try {
-      await storage.seedSystemFolderDefaults();
-    } catch (err: any) {
-      console.error("[M365] Failed to seed folder templates:", err.message);
-    }
-  })();
-
   // Register authentication routes first
   registerAuthRoutes(app);
   
@@ -230,24 +221,14 @@ export async function registerRoutes(app: Express): Promise<void> {
           uploadedAt: new Date(), uploadedBy: uploadedBy
         };
       }
-      const businessDocTypes = ['invoice', 'contract', 'receipt', 'report'];
+      const businessDocTypes = ['invoice', 'contract', 'receipt'];
       const useLocalStorage = !isProductionEnv && !speEnabled && businessDocTypes.includes(documentType);
       if (useLocalStorage) {
         const result = await localFileStorageInstance.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId);
         return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},LOCAL_STORAGE` : 'LOCAL_STORAGE' } };
       }
-      if (speEnabled) {
-        const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
-        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
-      }
-      try {
-        const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
-        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
-      } catch (speErr) {
-        console.warn(`[SMART_STORAGE] SharePoint upload failed, falling back to local:`, speErr instanceof Error ? speErr.message : speErr);
-        const result = await localFileStorageInstance.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId);
-        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},LOCAL_STORAGE` : 'LOCAL_STORAGE' } };
-      }
+      const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
+      return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
     },
     async getFileContent(fileId: string, tenantId?: string) {
       try { const buffer = await receiptStorage.getReceipt(fileId); return { buffer, metadata: {} }; }
@@ -467,62 +448,6 @@ export async function registerRoutes(app: Express): Promise<void> {
         error: error.message || "Database connection failed",
         environment: process.env.NODE_ENV || "development"
       });
-    }
-  });
-
-  // Microsoft Graph webhook endpoint (unauthenticated - Graph sends validation and notifications)
-  app.post("/api/webhooks/planner", async (req, res) => {
-    if (req.query.validationToken) {
-      console.log('[PLANNER-WEBHOOK] Validation challenge received');
-      res.set('Content-Type', 'text/plain');
-      return res.status(200).send(req.query.validationToken as string);
-    }
-
-    try {
-      const notifications = req.body?.value;
-      if (!notifications || !Array.isArray(notifications)) {
-        return res.status(202).send();
-      }
-
-      console.log(`[PLANNER-WEBHOOK] Received ${notifications.length} notification(s)`);
-
-      res.status(202).send();
-
-      for (const notification of notifications) {
-        try {
-          if (!notification.subscriptionId) {
-            console.warn('[PLANNER-WEBHOOK] Notification missing subscriptionId, ignoring');
-            continue;
-          }
-
-          const sub = await storage.getPlannerWebhookSubscriptionBySubId(notification.subscriptionId);
-          if (!sub) {
-            console.warn('[PLANNER-WEBHOOK] Unknown subscription ID, ignoring notification');
-            continue;
-          }
-
-          if (sub.clientState !== notification.clientState) {
-            console.warn('[PLANNER-WEBHOOK] Client state mismatch, ignoring notification');
-            continue;
-          }
-
-          await storage.updatePlannerWebhookSubscription(sub.id, {
-            lastNotificationAt: new Date(),
-          });
-
-          const connection = await storage.getProjectPlannerConnectionById(sub.connectionId);
-          if (connection && connection.syncEnabled) {
-            const { syncFromPlanner } = await import('./services/planner-sync-scheduler.js');
-            console.log(`[PLANNER-WEBHOOK] Triggering inbound sync for project ${connection.projectId} via subscription ${sub.subscriptionId}`);
-            await syncFromPlanner(connection.projectId, connection);
-          }
-        } catch (notifErr: any) {
-          console.error('[PLANNER-WEBHOOK] Error processing notification:', notifErr.message);
-        }
-      }
-    } catch (error: any) {
-      console.error('[PLANNER-WEBHOOK] Error handling webhook:', error.message);
-      res.status(202).send();
     }
   });
 
@@ -1127,8 +1052,6 @@ export async function registerRoutes(app: Express): Promise<void> {
         speMigrationStartedAt: tenant.speMigrationStartedAt,
         adminConsentGranted: tenant.adminConsentGranted ?? false,
         azureTenantId: tenant.azureTenantId || null,
-        m365AutoProvisionTeams: tenant.m365AutoProvisionTeams ?? false,
-        m365DefaultTeamTemplate: tenant.m365DefaultTeamTemplate ?? 'standard',
         serverEnvironment: (process.env.REPLIT_DEPLOYMENT === '1' || process.env.NODE_ENV === 'production') ? 'production' : 'development',
       });
     } catch (error: any) {
@@ -3290,45 +3213,6 @@ export async function registerRoutes(app: Express): Promise<void> {
       // Auto-create or reactivate engagement when a person is assigned
       if (validatedData.personId) {
         await storage.ensureProjectEngagement(req.params.projectId, validatedData.personId);
-        
-        (async () => {
-          try {
-            const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-            if (connection?.autoAddMembers && connection.groupId) {
-              const person = await storage.getUser(validatedData.personId);
-              if (person?.email) {
-                const { plannerService } = await import('./services/planner-service');
-                let azureMapping = await storage.getUserAzureMappingByEmail(person.email);
-                if (!azureMapping) {
-                  azureMapping = await storage.getUserAzureMapping(validatedData.personId);
-                }
-                if (!azureMapping) {
-                  const azureUser = await plannerService.findUserByEmail(person.email);
-                  if (azureUser) {
-                    azureMapping = await storage.createUserAzureMapping({
-                      userId: validatedData.personId,
-                      azureUserId: azureUser.id,
-                      azureUserPrincipalName: azureUser.userPrincipalName,
-                      azureDisplayName: azureUser.displayName,
-                      mappingMethod: 'auto_discovered',
-                      verifiedAt: new Date()
-                    });
-                  }
-                }
-                if (azureMapping) {
-                  const addResult = await plannerService.addTeamMember(connection.groupId, azureMapping.azureUserId);
-                  if (addResult) {
-                    console.log('[PLANNER] Auto-added user to Team on allocation:', person.email);
-                  } else {
-                    console.warn('[PLANNER] Failed to auto-add user to Team:', person.email);
-                  }
-                }
-              }
-            }
-          } catch (autoAddErr: any) {
-            console.warn('[PLANNER] Auto-add to Team failed (non-blocking):', autoAddErr.message);
-          }
-        })();
       }
       
       res.status(201).json(created);
@@ -3379,18 +3263,6 @@ export async function registerRoutes(app: Express): Promise<void> {
       if (req.body.personId) {
         await storage.ensureProjectEngagement(req.params.projectId, req.body.personId);
       }
-
-      try {
-        const syncRecord = await storage.getPlannerTaskSync(req.params.id);
-        if (syncRecord && syncRecord.syncStatus === 'synced') {
-          await storage.updatePlannerTaskSync(syncRecord.id, {
-            syncStatus: 'pending_outbound',
-            localVersion: syncRecord.localVersion + 1,
-          });
-        }
-      } catch (syncErr: any) {
-        console.warn('[PLANNER-SYNC] Failed to mark sync record as pending_outbound:', syncErr.message);
-      }
       
       res.json(updated);
     } catch (error: any) {
@@ -3401,39 +3273,7 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   app.delete("/api/projects/:projectId/allocations/:id", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
     try {
-      const allocation = await storage.getProjectAllocation(req.params.id);
       await storage.deleteProjectAllocation(req.params.id);
-      
-      if (allocation?.personId) {
-        try {
-          const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-          if (connection?.groupId) {
-            const remainingAllocations = await storage.getProjectAllocations(req.params.projectId);
-            const stillAssigned = remainingAllocations.some(a => a.personId === allocation.personId);
-            
-            if (!stillAssigned) {
-              const project = await storage.getProject(req.params.projectId);
-              let hasOtherClientProjects = false;
-              if (project?.clientId) {
-                const userAllocations = await storage.getUserAllocations(allocation.personId);
-                hasOtherClientProjects = userAllocations.some(a => 
-                  a.project?.clientId === project.clientId && a.projectId !== req.params.projectId
-                );
-              }
-              
-              return res.json({ 
-                deleted: true,
-                teamRemovalSuggested: !hasOtherClientProjects,
-                personId: allocation.personId,
-                teamId: connection.groupId,
-              });
-            }
-          }
-        } catch (err: any) {
-          console.warn('[PLANNER] Error checking team removal eligibility:', err.message);
-        }
-      }
-      
       res.status(204).send();
     } catch (error: any) {
       console.error("[ERROR] Failed to delete project allocation:", error);
@@ -3655,183 +3495,6 @@ export async function registerRoutes(app: Express): Promise<void> {
     } catch (error: any) {
       console.error("[PLANNER] Failed to clear cache:", error);
       res.status(500).json({ success: false, error: error.message });
-    }
-  });
-
-  // ============ M365 Teams Integration Settings ============
-
-  // Get folder templates (effective = tenant overrides or system defaults)
-  app.get("/api/tenant/settings/m365/folder-templates", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as any;
-      const tenantId = user?.primaryTenantId;
-      const systemDefaults = await storage.getFolderTemplates('system');
-      const tenantOverrides = tenantId ? await storage.getFolderTemplates('tenant', tenantId) : [];
-      const effective = await storage.getEffectiveFolderTemplates(tenantId);
-
-      res.json({
-        systemDefaults: systemDefaults.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder })),
-        tenantOverrides: tenantOverrides.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder })),
-        effective: effective.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder, scope: t.scope })),
-        isUsingDefaults: tenantOverrides.length === 0,
-      });
-    } catch (error: any) {
-      console.error("[M365] Failed to fetch folder templates:", error);
-      res.status(500).json({ message: "Failed to fetch folder templates" });
-    }
-  });
-
-  // Update tenant folder templates
-  app.put("/api/tenant/settings/m365/folder-templates", requireAuth, requireRole(["admin", "owner"]), async (req, res) => {
-    try {
-      const user = req.user as any;
-      const tenantId = user?.primaryTenantId;
-
-      if (!tenantId) {
-        return res.status(400).json({ message: "No tenant associated with user" });
-      }
-
-      const schema = z.object({
-        folders: z.array(z.object({
-          folderName: z.string().min(1).max(255),
-          sortOrder: z.number().int().min(0),
-        })),
-        resetToDefaults: z.boolean().optional(),
-      });
-
-      const parsed = schema.parse(req.body);
-
-      if (parsed.resetToDefaults) {
-        await storage.upsertTenantFolderTemplates(tenantId, []);
-      } else {
-        await storage.upsertTenantFolderTemplates(tenantId, parsed.folders);
-      }
-
-      const effective = await storage.getEffectiveFolderTemplates(tenantId);
-      const tenantOverrides = await storage.getFolderTemplates('tenant', tenantId);
-
-      res.json({
-        effective: effective.map(t => ({ id: t.id, folderName: t.folderName, sortOrder: t.sortOrder, scope: t.scope })),
-        isUsingDefaults: tenantOverrides.length === 0,
-      });
-    } catch (error: any) {
-      console.error("[M365] Failed to update folder templates:", error);
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid folder template data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to update folder templates" });
-    }
-  });
-
-  // Update M365 Teams settings (auto-provision toggle, template)
-  app.patch("/api/tenant/settings/m365", requireAuth, requireRole(["admin", "owner"]), async (req, res) => {
-    try {
-      const user = req.user as any;
-      const tenantId = user?.primaryTenantId;
-
-      if (!tenantId) {
-        return res.status(400).json({ message: "No tenant associated with user" });
-      }
-
-      const validTemplates = ['standard', 'educationClass', 'educationStaff', 'educationPLC'] as const;
-      const schema = z.object({
-        m365AutoProvisionTeams: z.boolean().optional(),
-        m365DefaultTeamTemplate: z.enum(validTemplates).optional(),
-      });
-
-      const parsed = schema.parse(req.body);
-      const updateData: Partial<{ m365AutoProvisionTeams: boolean; m365DefaultTeamTemplate: string }> = {};
-
-      if (parsed.m365AutoProvisionTeams !== undefined) {
-        updateData.m365AutoProvisionTeams = parsed.m365AutoProvisionTeams;
-      }
-      if (parsed.m365DefaultTeamTemplate !== undefined) {
-        updateData.m365DefaultTeamTemplate = parsed.m365DefaultTeamTemplate;
-      }
-
-      if (Object.keys(updateData).length > 0) {
-        await storage.updateTenant(tenantId, updateData);
-      }
-
-      const tenant = await storage.getTenant(tenantId);
-      res.json({
-        m365AutoProvisionTeams: tenant?.m365AutoProvisionTeams ?? false,
-        m365DefaultTeamTemplate: tenant?.m365DefaultTeamTemplate ?? 'standard',
-      });
-    } catch (error: unknown) {
-      console.error("[M365] Failed to update M365 settings:", error);
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid settings data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to update M365 settings" });
-    }
-  });
-
-  // Test M365 connection (Graph API permissions check)
-  app.post("/api/tenant/settings/m365/test-connection", requireAuth, requireRole(["admin", "owner"]), async (req, res) => {
-    try {
-      const { plannerService } = await import('./services/planner-service');
-      const connectionResult = await plannerService.testConnection();
-
-      const permissions: string[] = [];
-      if (connectionResult.success) {
-        permissions.push('Graph API Access');
-      }
-
-      let teamTemplatesAvailable = false;
-      try {
-        const templates = await plannerService.listTeamTemplates();
-        if (templates.length > 0) {
-          teamTemplatesAvailable = true;
-          permissions.push('Team Templates');
-        }
-      } catch {
-        // Team templates permission not available
-      }
-
-      res.json({
-        success: connectionResult.success,
-        permissions,
-        teamTemplatesAvailable,
-        message: connectionResult.success
-          ? `Connected successfully. Verified ${permissions.length} permission(s).`
-          : 'Connection failed. Please verify your Microsoft Graph configuration.',
-        error: connectionResult.success ? undefined : connectionResult.error,
-      });
-    } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error("[M365] Connection test failed:", errMsg);
-      res.status(500).json({
-        success: false,
-        permissions: [],
-        message: 'Connection test failed',
-        error: errMsg,
-      });
-    }
-  });
-
-  // Get client team mapping
-  app.get("/api/clients/:id/team", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as any;
-      const tenantId = user?.primaryTenantId;
-
-      const client = await storage.getClient(req.params.id);
-      if (!client) {
-        return res.status(404).json({ message: "Client not found" });
-      }
-      if (tenantId && client.tenantId && client.tenantId !== tenantId) {
-        return res.status(404).json({ message: "Client not found" });
-      }
-
-      const clientTeam = await storage.getClientTeam(req.params.id);
-      if (!clientTeam) {
-        return res.status(404).json({ message: "No team mapping found for this client" });
-      }
-      res.json(clientTeam);
-    } catch (error: any) {
-      console.error("[M365] Failed to fetch client team:", error);
-      res.status(500).json({ message: "Failed to fetch client team" });
     }
   });
 
@@ -4505,7 +4168,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
     }
   });
 
-  // Delete a saved status report (also cleans up stored PPTX file)
+  // Delete a saved status report
   app.delete("/api/projects/:projectId/status-reports/:reportId", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
       const { projectId, reportId } = req.params;
@@ -4515,46 +4178,11 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
       if (user.tenantId && existing.tenantId && existing.tenantId !== user.tenantId) {
         return res.status(404).json({ message: "Status report not found" });
       }
-      if (existing.speFileId) {
-        try {
-          await sharePointFileStorage.deleteFile(existing.speFileId, existing.tenantId || undefined);
-          console.log(`[STATUS-REPORTS] Deleted stored PPTX file: ${existing.speFileId}`);
-        } catch (fileErr: any) {
-          console.warn(`[STATUS-REPORTS] Failed to delete stored file ${existing.speFileId}:`, fileErr.message);
-        }
-      }
       await storage.deleteStatusReport(reportId);
       res.json({ success: true });
     } catch (error: any) {
       console.error("[STATUS-REPORTS] Failed to delete status report:", error);
       res.status(500).json({ message: "Failed to delete status report" });
-    }
-  });
-
-  // Download a saved PPTX status report
-  app.get("/api/projects/:projectId/status-reports/:reportId/download", requireAuth, async (req, res) => {
-    try {
-      const { projectId, reportId } = req.params;
-      const user = req.user as any;
-      const report = await storage.getStatusReport(reportId);
-      if (!report || report.projectId !== projectId) return res.status(404).json({ message: "Status report not found" });
-      if (user.tenantId && report.tenantId && report.tenantId !== user.tenantId) {
-        return res.status(404).json({ message: "Status report not found" });
-      }
-      if (!report.speFileId) {
-        return res.status(404).json({ message: "No stored PPTX file for this report" });
-      }
-      const fileData = await smartFileStorage.downloadFileDirect(report.speFileId, report.tenantId || undefined);
-      if (!fileData) {
-        return res.status(404).json({ message: "PPTX file not found in storage" });
-      }
-      const pptxFileName = (report.metadata as any)?.pptxFileName || `${report.title.replace(/[^a-z0-9]/gi, '_')}.pptx`;
-      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
-      res.setHeader("Content-Disposition", `attachment; filename="${pptxFileName}"`);
-      res.send(fileData.buffer);
-    } catch (error: any) {
-      console.error("[STATUS-REPORTS] Failed to download PPTX:", error);
-      res.status(500).json({ message: "Failed to download report" });
     }
   });
 
@@ -4648,13 +4276,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
         syncDirection: syncDirection || 'bidirectional',
         connectedBy: user.id
       });
-
-      try {
-        const { createWebhookForConnection } = await import('./services/planner-sync-scheduler.js');
-        await createWebhookForConnection(connection.id, planId);
-      } catch (webhookErr: any) {
-        console.warn('[PLANNER] Webhook creation failed, will use polling:', webhookErr.message);
-      }
       
       res.json(connection);
     } catch (error: any) {
@@ -4688,26 +4309,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
   // Disconnect project from Planner
   app.delete("/api/projects/:projectId/planner-connection", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
     try {
-      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-      if (connection) {
-        try {
-          const subs = await storage.getAllActivePlannerWebhookSubscriptions();
-          const connSubs = subs.filter(s => s.connectionId === connection.id);
-          if (connSubs.length > 0) {
-            const { plannerService } = await import('./services/planner-service.js');
-            for (const sub of connSubs) {
-              try {
-                await plannerService.deleteWebhookSubscription(sub.subscriptionId);
-              } catch (delErr: any) {
-                console.warn(`[PLANNER] Failed to delete Graph webhook subscription ${sub.subscriptionId}:`, delErr.message);
-              }
-            }
-          }
-        } catch (webhookErr: any) {
-          console.warn('[PLANNER] Failed to clean up webhooks on disconnect:', webhookErr.message);
-        }
-      }
-
       await storage.deleteProjectPlannerConnection(req.params.projectId);
       res.status(204).send();
     } catch (error: any) {
@@ -5507,9 +5108,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
       }
       
       const syncs = await storage.getPlannerTaskSyncsByConnection(connection.id);
-      const unresolvedLogs = await storage.getUnresolvedPlannerSyncLogs(connection.id);
-      const recentLogs = await storage.getPlannerSyncLogs(connection.id, 20);
-      const conflictCount = syncs.filter(s => s.syncStatus === 'conflict').length;
       
       res.json({
         connected: true,
@@ -5522,372 +5120,21 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
           syncDirection: connection.syncDirection,
           autoAddMembers: connection.autoAddMembers,
           lastSyncAt: connection.lastSyncAt,
-          lastSyncStatus: connection.lastSyncStatus,
-          lastInboundSyncAt: connection.lastInboundSyncAt,
-          lastOutboundSyncAt: connection.lastOutboundSyncAt,
-          webhookActive: connection.webhookActive
+          lastSyncStatus: connection.lastSyncStatus
         },
         syncedTasks: syncs.length,
-        conflictCount,
         syncs: syncs.map(s => ({
-          id: s.id,
           allocationId: s.allocationId,
           taskId: s.taskId,
           taskTitle: s.taskTitle,
           bucketName: s.bucketName,
           syncStatus: s.syncStatus,
-          syncError: s.syncError,
           lastSyncedAt: s.lastSyncedAt
-        })),
-        unresolvedLogs: unresolvedLogs.map(l => ({
-          id: l.id,
-          direction: l.direction,
-          action: l.action,
-          allocationId: l.allocationId,
-          taskId: l.taskId,
-          details: l.details,
-          createdAt: l.createdAt
-        })),
-        recentLogs: recentLogs.map(l => ({
-          id: l.id,
-          direction: l.direction,
-          action: l.action,
-          details: l.details,
-          createdAt: l.createdAt,
-          resolvedAt: l.resolvedAt
         }))
       });
     } catch (error: any) {
       console.error("[PLANNER] Failed to get sync status:", error);
       res.status(500).json({ message: "Failed to get sync status" });
-    }
-  });
-
-  // Resolve planner sync conflict
-  app.post("/api/projects/:projectId/planner-sync/resolve-conflict", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
-    try {
-      const { syncId, resolution, logId } = req.body;
-      const user = req.user as any;
-
-      const validResolutions = ['keep_local', 'keep_remote', 'dismiss'];
-      if (!syncId || !resolution || !validResolutions.includes(resolution)) {
-        return res.status(400).json({ message: "syncId and a valid resolution (keep_local, keep_remote, dismiss) are required" });
-      }
-
-      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-      if (!connection) {
-        return res.status(404).json({ message: "Planner connection not found" });
-      }
-
-      const syncs = await storage.getPlannerTaskSyncsByConnection(connection.id);
-      const syncRecord = syncs.find(s => s.id === syncId);
-      if (!syncRecord) {
-        return res.status(404).json({ message: "Sync record not found" });
-      }
-
-      if (resolution === 'keep_local') {
-        await storage.updatePlannerTaskSync(syncId, {
-          syncStatus: 'pending_outbound',
-          syncError: null,
-        });
-      } else if (resolution === 'keep_remote') {
-        await storage.updatePlannerTaskSync(syncId, {
-          syncStatus: 'pending_inbound',
-          syncError: null,
-        });
-      } else if (resolution === 'dismiss') {
-        const { plannerService } = await import('./services/planner-service.js');
-        let currentEtag = syncRecord.remoteEtag;
-        try {
-          const remoteTask = await plannerService.getTask(syncRecord.taskId);
-          if (remoteTask) {
-            currentEtag = remoteTask['@odata.etag'] || currentEtag;
-          }
-        } catch (etagErr: any) {
-          console.warn('[PLANNER] Could not fetch current etag for dismiss:', etagErr.message);
-        }
-        await storage.updatePlannerTaskSync(syncId, {
-          syncStatus: 'synced',
-          syncError: null,
-          remoteEtag: currentEtag,
-          localVersion: 1,
-        });
-      }
-
-      if (logId) {
-        await storage.updatePlannerSyncLog(logId, {
-          resolvedAt: new Date(),
-          resolvedBy: user.id,
-        });
-      }
-
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to resolve conflict:", error);
-      res.status(500).json({ message: "Failed to resolve conflict" });
-    }
-  });
-
-  // Dismiss planner sync log entry
-  app.post("/api/projects/:projectId/planner-sync/dismiss-log", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
-    try {
-      const { logId } = req.body;
-      const user = req.user as any;
-
-      if (!logId) {
-        return res.status(400).json({ message: "logId is required" });
-      }
-
-      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-      if (!connection) {
-        return res.status(404).json({ message: "Planner connection not found" });
-      }
-
-      const logs = await storage.getPlannerSyncLogs(connection.id, 100);
-      const log = logs.find(l => l.id === logId);
-      if (!log) {
-        return res.status(404).json({ message: "Log entry not found for this project" });
-      }
-
-      await storage.updatePlannerSyncLog(logId, {
-        resolvedAt: new Date(),
-        resolvedBy: user.id,
-      });
-
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to dismiss log:", error);
-      res.status(500).json({ message: "Failed to dismiss log entry" });
-    }
-  });
-
-  // ============ TEAM MEMBER MANAGEMENT ENDPOINTS ============
-
-  app.get("/api/projects/:projectId/team-members", requireAuth, async (req, res) => {
-    try {
-      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-      if (!connection || !connection.groupId) {
-        return res.json({ members: [], hasConnection: false });
-      }
-
-      const allocations = await storage.getProjectAllocations(req.params.projectId);
-      const uniquePersonIds = [...new Set(allocations.filter(a => a.personId).map(a => a.personId))];
-
-      const { plannerService } = await import('./services/planner-service');
-
-      let actualTeamMembers: any[] = [];
-      let teamFetchSucceeded = false;
-      try {
-        actualTeamMembers = await plannerService.getTeamMembers(connection.groupId);
-        teamFetchSucceeded = true;
-      } catch (err: any) {
-        console.warn('[PLANNER] Could not fetch actual team members:', err.message);
-      }
-
-      const actualMemberAzureIds = new Set(actualTeamMembers.map(m => m.id));
-
-      const members = await Promise.all(
-        uniquePersonIds.map(async (personId) => {
-          const person = allocations.find(a => a.personId === personId)?.person;
-          if (!person) return null;
-
-          let azureMapping = await storage.getUserAzureMappingByEmail(person.email);
-          if (!azureMapping) {
-            azureMapping = await storage.getUserAzureMapping(personId);
-          }
-
-          let teamMembershipStatus: 'added' | 'not_in_azure_ad' | 'not_in_team' | 'pending' = 'not_in_azure_ad';
-
-          if (azureMapping) {
-            if (teamFetchSucceeded) {
-              teamMembershipStatus = actualMemberAzureIds.has(azureMapping.azureUserId) ? 'added' : 'not_in_team';
-            } else {
-              teamMembershipStatus = 'pending';
-            }
-          }
-
-          return {
-            personId,
-            name: person.name || person.username,
-            email: person.email,
-            azureUserId: azureMapping?.azureUserId || null,
-            azureDisplayName: azureMapping?.azureDisplayName || null,
-            mappingMethod: azureMapping?.mappingMethod || null,
-            teamMembershipStatus,
-            isAssigned: true,
-          };
-        })
-      );
-
-      const assignedAzureIds = new Set(
-        members.filter(m => m?.azureUserId).map(m => m!.azureUserId)
-      );
-      const unassignedTeamMembers = await Promise.all(
-        actualTeamMembers
-          .filter(tm => !assignedAzureIds.has(tm.id))
-          .map(async (tm) => {
-            let localPersonId: string | null = null;
-            try {
-              const mapping = await storage.getUserAzureMappingByAzureId(tm.id);
-              if (mapping) localPersonId = mapping.userId;
-            } catch {}
-            return {
-              personId: localPersonId,
-              name: tm.displayName,
-              email: tm.mail || tm.userPrincipalName || '',
-              azureUserId: tm.id,
-              azureDisplayName: tm.displayName,
-              mappingMethod: null,
-              teamMembershipStatus: 'added' as const,
-              isAssigned: false,
-            };
-          })
-      );
-
-      res.json({
-        members: [...members.filter(Boolean), ...unassignedTeamMembers],
-        hasConnection: true,
-        teamId: connection.groupId,
-        teamName: connection.groupName,
-        autoAddMembers: connection.autoAddMembers,
-      });
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to get team members:", error);
-      res.status(500).json({ message: "Failed to get team members" });
-    }
-  });
-
-  app.post("/api/projects/:projectId/team-members/:userId/add", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
-    try {
-      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-      if (!connection || !connection.groupId) {
-        return res.status(400).json({ message: "No Planner connection or Team configured for this project" });
-      }
-
-      const { plannerService } = await import('./services/planner-service');
-      const person = await storage.getUser(req.params.userId);
-      if (!person) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
-      let azureMapping = person.email ? await storage.getUserAzureMappingByEmail(person.email) : null;
-      if (!azureMapping) {
-        azureMapping = await storage.getUserAzureMapping(req.params.userId);
-      }
-
-      if (!azureMapping && person.email) {
-        const azureUser = await plannerService.findUserByEmail(person.email);
-        if (azureUser) {
-          azureMapping = await storage.createUserAzureMapping({
-            userId: req.params.userId,
-            azureUserId: azureUser.id,
-            azureUserPrincipalName: azureUser.userPrincipalName,
-            azureDisplayName: azureUser.displayName,
-            mappingMethod: 'auto_discovered',
-            verifiedAt: new Date()
-          });
-        }
-      }
-
-      if (!azureMapping) {
-        return res.status(400).json({ message: "Could not find user in Azure AD. Please verify their email address." });
-      }
-
-      const addResult = await plannerService.addTeamMember(connection.groupId, azureMapping.azureUserId);
-      if (addResult) {
-        res.json({ success: true, message: "User added to Team successfully" });
-      } else {
-        res.status(500).json({ message: "Failed to add user to Team" });
-      }
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to add team member:", error);
-      res.status(500).json({ message: "Failed to add team member" });
-    }
-  });
-
-  app.delete("/api/projects/:projectId/team-members/:userId/remove", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
-    try {
-      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
-      if (!connection || !connection.groupId) {
-        return res.status(400).json({ message: "No Planner connection or Team configured for this project" });
-      }
-
-      const { plannerService } = await import('./services/planner-service');
-      const userId = req.params.userId;
-
-      let azureUserId: string | null = null;
-
-      const azureMapping = await storage.getUserAzureMapping(userId);
-      if (azureMapping) {
-        azureUserId = azureMapping.azureUserId;
-      } else {
-        const person = await storage.getUser(userId);
-        if (person?.email) {
-          const emailMapping = await storage.getUserAzureMappingByEmail(person.email);
-          if (emailMapping) {
-            azureUserId = emailMapping.azureUserId;
-          }
-        }
-      }
-
-      if (!azureUserId) {
-        const azureIdMapping = await storage.getUserAzureMappingByAzureId(userId);
-        if (azureIdMapping) {
-          azureUserId = azureIdMapping.azureUserId;
-        } else {
-          azureUserId = userId;
-        }
-      }
-
-      const removed = await plannerService.removeTeamMember(connection.groupId, azureUserId);
-      if (removed) {
-        res.json({ success: true, message: "User removed from Team successfully" });
-      } else {
-        res.status(500).json({ message: "Failed to remove user from Team" });
-      }
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to remove team member:", error);
-      res.status(500).json({ message: "Failed to remove team member" });
-    }
-  });
-
-  app.post("/api/projects/:projectId/team-members/:userId/retry-mapping", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
-    try {
-      const { plannerService } = await import('./services/planner-service');
-      const person = await storage.getUser(req.params.userId);
-      if (!person?.email) {
-        return res.status(400).json({ message: "User has no email address" });
-      }
-
-      const azureUser = await plannerService.findUserByEmail(person.email);
-      if (!azureUser) {
-        return res.status(404).json({ message: "User not found in Azure AD" });
-      }
-
-      const existing = await storage.getUserAzureMapping(req.params.userId);
-      if (existing) {
-        await storage.updateUserAzureMapping(existing.id, {
-          azureUserId: azureUser.id,
-          azureUserPrincipalName: azureUser.userPrincipalName,
-          azureDisplayName: azureUser.displayName,
-          mappingMethod: 'auto_discovered',
-          verifiedAt: new Date()
-        });
-      } else {
-        await storage.createUserAzureMapping({
-          userId: req.params.userId,
-          azureUserId: azureUser.id,
-          azureUserPrincipalName: azureUser.userPrincipalName,
-          azureDisplayName: azureUser.displayName,
-          mappingMethod: 'auto_discovered',
-          verifiedAt: new Date()
-        });
-      }
-
-      res.json({ success: true, azureUser: { id: azureUser.id, displayName: azureUser.displayName } });
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to retry mapping:", error);
-      res.status(500).json({ message: "Failed to retry Azure AD mapping" });
     }
   });
 
@@ -9025,30 +8272,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
           }
         })();
 
-        let savedFileId: string | null = null;
-        try {
-          const pptxBuffer = fsNode.readFileSync(tmpFile);
-          const storedFile = await smartFileStorage.storeFile(
-            pptxBuffer,
-            filename,
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            {
-              documentType: 'report',
-              projectId: project.id,
-              projectCode: project.projectCode || project.name,
-              createdByUserId: req.user!.id,
-              metadataVersion: 1,
-            },
-            req.user!.id,
-            undefined,
-            tenantId || undefined
-          );
-          savedFileId = storedFile.id;
-          console.log(`[PPTX] File saved to storage: ${savedFileId}`);
-        } catch (storeErr: any) {
-          console.error("[PPTX] Failed to save PPTX to storage (will still stream to user):", storeErr.message);
-        }
-
         try {
           await storage.createStatusReport({
             projectId: req.params.id,
@@ -9060,7 +8283,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
             periodEnd: effectiveEndDate,
             reportContent: aiReport || null,
             status: "final",
-            speFileId: savedFileId,
             metadata: {
               projectName: project.name,
               clientName: project.client?.name || "Unknown",
@@ -9069,7 +8291,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
               style: reportStyle,
               generatedAt: new Date().toISOString(),
               generatedBy: req.user!.name || req.user!.email,
-              pptxFileName: filename,
             },
             generatedBy: req.user!.id,
           });
@@ -12239,7 +11460,7 @@ IMPORTANT: Always respond with valid JSON only. No text outside the JSON object.
     }
   });
 
-  app.post("/api/projects/:id/raidd/import", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
+  app.post("/api/projects/:id/raidd/import", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -12732,7 +11953,7 @@ Provide a JSON response with:
     }
   });
 
-  app.post("/api/raidd/ai/ingest-text", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
+  app.post("/api/raidd/ai/ingest-text", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
     try {
       const { text, projectContext } = req.body;
       if (!text) {
@@ -12811,7 +12032,7 @@ Only include fields relevant to each item type. Be specific and actionable.`;
     }
   });
 
-  app.post("/api/raidd/ai/extract-decisions", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
+  app.post("/api/raidd/ai/extract-decisions", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
     try {
       const { text, projectContext } = req.body;
       if (!text) {
@@ -13249,23 +12470,11 @@ Return a JSON response:
           category: category || undefined,
           tenantId: effectiveTenantId,
         });
-        const userIds = [...new Set(tickets.map(t => t.userId))];
-        const usersMap = new Map<string, { id: string; firstName: string | null; lastName: string | null; email: string | null }>();
-        for (const uid of userIds) {
-          const u = await storage.getUser(uid);
-          if (u) usersMap.set(uid, { id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email });
-        }
-        const enriched = tickets.map(t => ({
-          ...t,
-          author: usersMap.get(t.userId) || null,
-        }));
-        return res.json(enriched);
+        return res.json(tickets);
       }
 
       const tickets = await storage.getSupportTicketsByUserId(user.id);
-      const userInfo = { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email };
-      const enrichedTickets = tickets.map(t => ({ ...t, author: userInfo }));
-      return res.json(enrichedTickets);
+      return res.json(tickets);
     } catch (error) {
       console.error("Error fetching support tickets:", error);
       return res.status(500).json({ error: "Failed to fetch support tickets" });

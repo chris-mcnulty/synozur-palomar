@@ -110,14 +110,8 @@ function TicketList({
   onSelectTicket: (id: string) => void;
   onNewTicket: () => void;
 }) {
-  const [showClosed, setShowClosed] = useState(false);
   const { data: tickets, isLoading } = useQuery<Ticket[]>({
     queryKey: ["/api/support/tickets"],
-  });
-
-  const filteredTickets = tickets?.filter((t) => {
-    if (showClosed) return t.status === "closed" || t.status === "resolved";
-    return t.status !== "closed" && t.status !== "resolved";
   });
 
   if (isLoading) {
@@ -141,40 +135,17 @@ function TicketList({
         </Button>
       </div>
 
-      <div className="flex gap-2">
-        <Button
-          variant={!showClosed ? "default" : "outline"}
-          size="sm"
-          onClick={() => setShowClosed(false)}
-          data-testid="tab-active-tickets"
-        >
-          Active
-        </Button>
-        <Button
-          variant={showClosed ? "default" : "outline"}
-          size="sm"
-          onClick={() => setShowClosed(true)}
-          data-testid="tab-closed-tickets"
-        >
-          Closed / Resolved
-        </Button>
-      </div>
-
-      {!filteredTickets || filteredTickets.length === 0 ? (
+      {!tickets || tickets.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <LifeBuoy className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-muted-foreground" data-testid="text-empty-tickets">
-            {showClosed ? "No closed or resolved tickets" : "No active support tickets"}
-          </p>
+          <p className="text-muted-foreground" data-testid="text-empty-tickets">No support tickets yet</p>
           <p className="text-sm text-muted-foreground mt-1">
-            {showClosed
-              ? "Closed and resolved tickets will appear here."
-              : 'Click "New Ticket" to create your first support request.'}
+            Click "New Ticket" to create your first support request.
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredTickets.map((ticket) => (
+          {tickets.map((ticket) => (
             <Card
               key={ticket.id}
               className="cursor-pointer hover:shadow-md transition-shadow"
@@ -195,13 +166,6 @@ function TicketList({
                     <p className="font-medium truncate" data-testid={`text-ticket-subject-${ticket.id}`}>
                       {ticket.subject}
                     </p>
-                    {ticket.author && (
-                      <p className="text-xs text-muted-foreground" data-testid={`text-ticket-author-${ticket.id}`}>
-                        Submitted by {ticket.author.firstName || ticket.author.lastName
-                          ? `${ticket.author.firstName || ""} ${ticket.author.lastName || ""}`.trim()
-                          : ticket.author.email || "Unknown"}
-                      </p>
-                    )}
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="outline" className="text-xs" data-testid={`badge-category-${ticket.id}`}>
                         {formatLabel(ticket.category)}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, getSessionId } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Trash2, Eye, FileText, Presentation, CheckCircle2, Clock, Loader2, Download } from "lucide-react";
+import { MoreHorizontal, Trash2, Eye, FileText, Presentation, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import type { StatusReport } from "@shared/schema";
 
 interface StatusReportsTabProps {
@@ -29,16 +29,20 @@ const TYPE_ICONS: Record<string, typeof FileText> = {
 export function StatusReportsTab({ projectId }: StatusReportsTabProps) {
   const { toast } = useToast();
   const [viewingReport, setViewingReport] = useState<(StatusReport & { generatorName?: string }) | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const { data: reports = [], isLoading } = useQuery<(StatusReport & { generatorName?: string })[]>({
     queryKey: ["/api/projects", projectId, "status-reports"],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/status-reports`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch status reports");
+      return res.json();
+    },
     enabled: !!projectId,
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (reportId: string) => {
-      await apiRequest(`/api/projects/${projectId}/status-reports/${reportId}`, { method: "DELETE" });
+      await apiRequest("DELETE", `/api/projects/${projectId}/status-reports/${reportId}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "status-reports"] });
@@ -51,7 +55,7 @@ export function StatusReportsTab({ projectId }: StatusReportsTabProps) {
 
   const finalizeMutation = useMutation({
     mutationFn: async (reportId: string) => {
-      await apiRequest(`/api/projects/${projectId}/status-reports/${reportId}`, { method: "PATCH", body: JSON.stringify({ status: "final" }) });
+      await apiRequest("PATCH", `/api/projects/${projectId}/status-reports/${reportId}`, { status: "final" });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "status-reports"] });
@@ -61,35 +65,6 @@ export function StatusReportsTab({ projectId }: StatusReportsTabProps) {
       toast({ title: "Failed to update report", variant: "destructive" });
     },
   });
-
-  const handleDownloadPptx = async (report: StatusReport) => {
-    if (!report.speFileId) return;
-    setDownloadingId(report.id);
-    try {
-      const headers: Record<string, string> = {};
-      const sid = getSessionId();
-      if (sid) headers['x-session-id'] = sid;
-      const res = await fetch(`/api/projects/${projectId}/status-reports/${report.id}/download`, {
-        headers,
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Download failed");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const meta = report.metadata as any;
-      a.download = meta?.pptxFileName || `${report.title.replace(/[^a-z0-9]/gi, '_')}.pptx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch {
-      toast({ title: "Failed to download PPTX", variant: "destructive" });
-    } finally {
-      setDownloadingId(null);
-    }
-  };
 
   const formatDate = (d: string | null) => {
     if (!d) return "—";
@@ -193,16 +168,6 @@ export function StatusReportsTab({ projectId }: StatusReportsTabProps) {
                               {report.reportContent && (
                                 <DropdownMenuItem onClick={() => setViewingReport(report)}>
                                   <Eye className="h-4 w-4 mr-2" /> View Report
-                                </DropdownMenuItem>
-                              )}
-                              {report.reportType === "pptx" && report.speFileId && (
-                                <DropdownMenuItem onClick={() => handleDownloadPptx(report)} disabled={downloadingId === report.id}>
-                                  {downloadingId === report.id ? (
-                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                  ) : (
-                                    <Download className="h-4 w-4 mr-2" />
-                                  )}
-                                  Download PPTX
                                 </DropdownMenuItem>
                               )}
                               {report.status === "draft" && (

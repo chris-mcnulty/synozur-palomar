@@ -555,45 +555,6 @@ class PlannerService {
     }
   }
 
-  async removeTeamMember(teamId: string, azureUserId: string): Promise<boolean> {
-    try {
-      console.log('[PLANNER] Removing member from team:', teamId, 'user:', azureUserId);
-      const client = await this.getClient();
-
-      const response = await client.api(`/teams/${teamId}/members`)
-        .filter(`microsoft.graph.aadUserConversationMember/userId eq '${azureUserId}'`)
-        .get();
-
-      if (!response.value || response.value.length === 0) {
-        console.log('[PLANNER] User not a member of team, nothing to remove');
-        return true;
-      }
-
-      const membershipId = response.value[0].id;
-      await client.api(`/teams/${teamId}/members/${membershipId}`).delete();
-
-      console.log('[PLANNER] Member removed successfully');
-      return true;
-    } catch (error: any) {
-      console.error('[PLANNER] Error removing team member:', error.message);
-      return false;
-    }
-  }
-
-  async getTeamMembers(teamId: string): Promise<AzureUser[]> {
-    const client = await this.getClient();
-    const response = await client.api(`/teams/${teamId}/members`)
-      .select('id,displayName,email,userId')
-      .top(999)
-      .get();
-    return (response.value || []).map((m: any) => ({
-      id: m.userId || m.id,
-      displayName: m.displayName,
-      mail: m.email,
-      userPrincipalName: m.email || ''
-    }));
-  }
-
   async getTeam(teamId: string): Promise<CreatedTeam | null> {
     try {
       const client = await this.getClient();
@@ -1015,66 +976,6 @@ class PlannerService {
     startOfWeek.setDate(diff);
     return `Week of ${startOfWeek.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
   }
-
-  // ============ WEBHOOK SUBSCRIPTION OPERATIONS ============
-
-  async createWebhookSubscription(
-    resource: string,
-    notificationUrl: string,
-    clientState: string,
-    expiresAt: Date
-  ): Promise<{ id: string; expirationDateTime: string }> {
-    try {
-      console.log('[PLANNER] Creating webhook subscription for resource:', resource);
-      const client = await this.getClient();
-
-      const subscription = await client.api('/subscriptions').post({
-        changeType: 'created,updated,deleted',
-        notificationUrl,
-        resource,
-        expirationDateTime: expiresAt.toISOString(),
-        clientState,
-      });
-
-      console.log('[PLANNER] Webhook subscription created:', subscription.id);
-      return {
-        id: subscription.id,
-        expirationDateTime: subscription.expirationDateTime,
-      };
-    } catch (error: any) {
-      console.error('[PLANNER] Error creating webhook subscription:', error.message);
-      throw new Error(`Failed to create webhook subscription: ${error.message}`);
-    }
-  }
-
-  async renewWebhookSubscription(subscriptionId: string, newExpiry: Date): Promise<void> {
-    try {
-      console.log('[PLANNER] Renewing webhook subscription:', subscriptionId);
-      const client = await this.getClient();
-
-      await client.api(`/subscriptions/${subscriptionId}`).patch({
-        expirationDateTime: newExpiry.toISOString(),
-      });
-
-      console.log('[PLANNER] Webhook subscription renewed');
-    } catch (error: any) {
-      console.error('[PLANNER] Error renewing webhook subscription:', error.message);
-      throw new Error(`Failed to renew webhook subscription: ${error.message}`);
-    }
-  }
-
-  async deleteWebhookSubscription(subscriptionId: string): Promise<void> {
-    try {
-      console.log('[PLANNER] Deleting webhook subscription:', subscriptionId);
-      const client = await this.getClient();
-      await client.api(`/subscriptions/${subscriptionId}`).delete();
-      console.log('[PLANNER] Webhook subscription deleted');
-    } catch (error: any) {
-      console.error('[PLANNER] Error deleting webhook subscription:', error.message);
-    }
-  }
-
-  // ============ CONNECTION TEST ============
 
   async testConnection(): Promise<{ success: boolean; message?: string; error?: string; permissionIssue?: string }> {
     try {

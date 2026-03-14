@@ -116,7 +116,6 @@ outputType = "webview"
 
 [agent]
 integrations = ["javascript_object_storage:1.0.0", "outlook:1.0.0", "sharepoint:1.0.0", "javascript_openai_ai_integrations:1.0.0", "sendgrid:1.0.0", "hubspot:1.0.0"]
-expertMode = true
 
 [userenv]
 
@@ -132,7 +131,3 @@ APP_PUBLIC_URL = "https://constellation.synozur.com"
 AZURE_FOUNDRY_ENDPOINT = "https://synozur-constellationai-resource.services.ai.azure.com/api/projects/synozur-constellationAI"
 AZURE_FOUNDRY_OPENAI_ENDPOINT = "https://synozur-constellationai-resource.cognitiveservices.azure.com/openai/v1"
 AZURE_FOUNDRY_DEPLOYMENT = "gpt-5.2"
-
-[postMerge]
-path = "scripts/post-merge.sh"
-timeoutMs = 20000

@@ -553,11 +553,11 @@ export function RaiddLogTab({ projectId, projectTeamMembers = [] }: RaiddLogTabP
   };
 
   return (
-    <Card className="border-border">
+    <Card className="bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800">
       <CardHeader className="pb-3">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <CardTitle className="text-lg font-semibold text-foreground">RAIDD Log</CardTitle>
+            <CardTitle className="text-lg font-semibold text-gray-900 dark:text-gray-100">RAIDD Log</CardTitle>
             <div className="flex gap-1.5">
               {summaryCounts.R > 0 && <Badge variant="outline" className="text-xs px-1.5 py-0">R:{summaryCounts.R}</Badge>}
               {summaryCounts.A > 0 && <Badge variant="outline" className="text-xs px-1.5 py-0">A:{summaryCounts.A}</Badge>}
@@ -654,7 +654,7 @@ export function RaiddLogTab({ projectId, projectTeamMembers = [] }: RaiddLogTabP
             {[1, 2, 3].map(i => <Skeleton key={i} className="h-10 w-full" />)}
           </div>
         ) : sortedEntries.length === 0 ? (
-          <div className="text-center py-12 text-muted-foreground">
+          <div className="text-center py-12 text-gray-500 dark:text-gray-400">
             <Shield className="h-10 w-10 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No RAIDD entries found</p>
             <p className="text-sm mt-1">Create your first entry to start tracking risks, issues, actions, decisions, and dependencies.</p>
@@ -695,7 +695,7 @@ export function RaiddLogTab({ projectId, projectTeamMembers = [] }: RaiddLogTabP
                         className={`cursor-pointer transition-colors ${isExpanded ? "bg-primary/5 dark:bg-primary/10 border-b-0" : ""}`}
                         onClick={() => setExpandedEntryId(isExpanded ? null : entry.id)}
                       >
-                        <TableCell className="font-mono text-xs text-muted-foreground">
+                        <TableCell className="font-mono text-xs text-gray-500 dark:text-gray-400">
                           <div className="flex items-center gap-1">
                             <ChevronDown className={`h-3 w-3 transition-transform duration-200 text-muted-foreground ${isExpanded ? "rotate-0" : "-rotate-90"}`} />
                             {entry.refNumber || "-"}
@@ -707,15 +707,15 @@ export function RaiddLogTab({ projectId, projectTeamMembers = [] }: RaiddLogTabP
                             <span>{getTypeLabel(entry.type)}</span>
                           </div>
                         </TableCell>
-                        <TableCell className="font-medium text-foreground max-w-[250px] truncate">{entry.title}</TableCell>
+                        <TableCell className="font-medium text-gray-900 dark:text-gray-100 max-w-[250px] truncate">{entry.title}</TableCell>
                         <TableCell>
                           <Badge className={`text-xs ${priorityColors[entry.priority] || ""}`}>{formatLabel(entry.priority)}</Badge>
                         </TableCell>
                         <TableCell>
                           <Badge className={`text-xs ${statusColors[entry.status] || ""}`}>{formatLabel(entry.status)}</Badge>
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{entry.ownerName || "-"}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{entry.dueDate ? formatBusinessDate(entry.dueDate, "MMM d") : "-"}</TableCell>
+                        <TableCell className="text-sm text-gray-600 dark:text-gray-400">{entry.ownerName || "-"}</TableCell>
+                        <TableCell className="text-sm text-gray-600 dark:text-gray-400">{entry.dueDate ? formatBusinessDate(entry.dueDate, "MMM d") : "-"}</TableCell>
                         <TableCell onClick={e => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -1007,7 +1007,7 @@ function DetailPanel({
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
           {getTypeIcon(entry.type)}
-          <h3 className="text-sm font-semibold text-foreground">{entry.title}</h3>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{entry.title}</h3>
           {entry.refNumber && (
             <Badge variant="outline" className="text-xs">{entry.refNumber}</Badge>
           )}
@@ -1020,67 +1020,67 @@ function DetailPanel({
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
         <div>
-          <span className="text-muted-foreground block text-xs">Type</span>
-          <span className="text-foreground">{getTypeLabel(entry.type)}</span>
+          <span className="text-gray-500 dark:text-gray-400 block text-xs">Type</span>
+          <span className="text-gray-900 dark:text-gray-100">{getTypeLabel(entry.type)}</span>
         </div>
         <div>
-          <span className="text-muted-foreground block text-xs">Priority</span>
+          <span className="text-gray-500 dark:text-gray-400 block text-xs">Priority</span>
           <Badge className={`text-xs ${priorityColors[entry.priority] || ""}`}>{formatLabel(entry.priority)}</Badge>
         </div>
         <div>
-          <span className="text-muted-foreground block text-xs">Status</span>
+          <span className="text-gray-500 dark:text-gray-400 block text-xs">Status</span>
           <Badge className={`text-xs ${statusColors[entry.status] || ""}`}>{formatLabel(entry.status)}</Badge>
         </div>
         <div>
-          <span className="text-muted-foreground block text-xs">Due Date</span>
-          <span className="text-foreground">{entry.dueDate ? formatBusinessDate(entry.dueDate) : "Not set"}</span>
+          <span className="text-gray-500 dark:text-gray-400 block text-xs">Due Date</span>
+          <span className="text-gray-900 dark:text-gray-100">{entry.dueDate ? formatBusinessDate(entry.dueDate) : "Not set"}</span>
         </div>
         {entry.impact && (
           <div>
-            <span className="text-muted-foreground block text-xs">Impact</span>
-            <span className="text-foreground">{formatLabel(entry.impact)}</span>
+            <span className="text-gray-500 dark:text-gray-400 block text-xs">Impact</span>
+            <span className="text-gray-900 dark:text-gray-100">{formatLabel(entry.impact)}</span>
           </div>
         )}
         {entry.likelihood && (
           <div>
-            <span className="text-muted-foreground block text-xs">Likelihood</span>
-            <span className="text-foreground">{formatLabel(entry.likelihood)}</span>
+            <span className="text-gray-500 dark:text-gray-400 block text-xs">Likelihood</span>
+            <span className="text-gray-900 dark:text-gray-100">{formatLabel(entry.likelihood)}</span>
           </div>
         )}
         <div>
-          <span className="text-muted-foreground block text-xs">Owner</span>
-          <span className="text-foreground">{entry.ownerName || "Unassigned"}</span>
+          <span className="text-gray-500 dark:text-gray-400 block text-xs">Owner</span>
+          <span className="text-gray-900 dark:text-gray-100">{entry.ownerName || "Unassigned"}</span>
         </div>
         <div>
-          <span className="text-muted-foreground block text-xs">Assignee</span>
-          <span className="text-foreground">{entry.assigneeName || "Unassigned"}</span>
+          <span className="text-gray-500 dark:text-gray-400 block text-xs">Assignee</span>
+          <span className="text-gray-900 dark:text-gray-100">{entry.assigneeName || "Unassigned"}</span>
         </div>
         {entry.category && (
           <div>
-            <span className="text-muted-foreground block text-xs">Category</span>
-            <span className="text-foreground">{entry.category}</span>
+            <span className="text-gray-500 dark:text-gray-400 block text-xs">Category</span>
+            <span className="text-gray-900 dark:text-gray-100">{entry.category}</span>
           </div>
         )}
       </div>
 
       {entry.description && (
         <div className="mb-3">
-          <span className="text-muted-foreground text-xs block mb-1">Description</span>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{entry.description}</p>
+          <span className="text-gray-500 dark:text-gray-400 text-xs block mb-1">Description</span>
+          <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{entry.description}</p>
         </div>
       )}
 
       {entry.mitigationPlan && (
         <div className="mb-3">
-          <span className="text-muted-foreground text-xs block mb-1">Mitigation Plan</span>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{entry.mitigationPlan}</p>
+          <span className="text-gray-500 dark:text-gray-400 text-xs block mb-1">Mitigation Plan</span>
+          <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{entry.mitigationPlan}</p>
         </div>
       )}
 
       {entry.resolutionNotes && (
         <div className="mb-3">
-          <span className="text-muted-foreground text-xs block mb-1">Resolution Notes</span>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{entry.resolutionNotes}</p>
+          <span className="text-gray-500 dark:text-gray-400 text-xs block mb-1">Resolution Notes</span>
+          <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{entry.resolutionNotes}</p>
         </div>
       )}
 
@@ -1098,26 +1098,26 @@ function DetailPanel({
       {entry.convertedFrom && (
         <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded text-sm">
           <span className="text-blue-600 dark:text-blue-400 font-medium">Converted from:</span>{" "}
-          <span className="text-muted-foreground">{entry.convertedFrom.refNumber} - {entry.convertedFrom.title}</span>
+          <span className="text-gray-700 dark:text-gray-300">{entry.convertedFrom.refNumber} - {entry.convertedFrom.title}</span>
         </div>
       )}
 
       {entry.supersededBy && (
         <div className="mb-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded text-sm">
           <span className="text-purple-600 dark:text-purple-400 font-medium">Superseded by:</span>{" "}
-          <span className="text-muted-foreground">{entry.supersededBy.refNumber} - {entry.supersededBy.title}</span>
+          <span className="text-gray-700 dark:text-gray-300">{entry.supersededBy.refNumber} - {entry.supersededBy.title}</span>
         </div>
       )}
 
       {entry.children && entry.children.length > 0 && (
         <div className="mb-3">
-          <span className="text-muted-foreground text-xs block mb-2">Action Items ({entry.children.length})</span>
+          <span className="text-gray-500 dark:text-gray-400 text-xs block mb-2">Action Items ({entry.children.length})</span>
           <div className="space-y-1">
             {entry.children.map(child => (
-              <div key={child.id} className="flex items-center gap-2 text-sm p-1.5 bg-background rounded border border-border">
+              <div key={child.id} className="flex items-center gap-2 text-sm p-1.5 bg-white dark:bg-gray-800 rounded border border-gray-100 dark:border-gray-700">
                 <CheckSquare className="h-3.5 w-3.5 text-gray-400" />
                 <span className="font-mono text-xs text-gray-400">{child.refNumber}</span>
-                <span className="text-muted-foreground flex-1 truncate">{child.title}</span>
+                <span className="text-gray-700 dark:text-gray-300 flex-1 truncate">{child.title}</span>
                 <Badge className={`text-xs ${statusColors[child.status] || ""}`}>{formatLabel(child.status)}</Badge>
                 <Badge className={`text-xs ${priorityColors[child.priority] || ""}`}>{formatLabel(child.priority)}</Badge>
               </div>
@@ -1358,7 +1358,7 @@ function RaiddFormDialog({
                         {teamMembers.length > 0 && (
                           <>
                             <Separator className="my-1" />
-                            <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">Team Members</div>
+                            <div className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400">Team Members</div>
                             {teamMembers.map(m => (
                               <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                             ))}
@@ -1367,7 +1367,7 @@ function RaiddFormDialog({
                         {clientStakeholders.length > 0 && (
                           <>
                             <Separator className="my-1" />
-                            <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">Client Stakeholders</div>
+                            <div className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400">Client Stakeholders</div>
                             {clientStakeholders.map(s => (
                               <SelectItem key={s.id} value={s.id}>{s.name}{s.stakeholderTitle ? ` (${s.stakeholderTitle})` : ''}</SelectItem>
                             ))}
@@ -1397,7 +1397,7 @@ function RaiddFormDialog({
                         {teamMembers.length > 0 && (
                           <>
                             <Separator className="my-1" />
-                            <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">Team Members</div>
+                            <div className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400">Team Members</div>
                             {teamMembers.map(m => (
                               <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                             ))}
@@ -1406,7 +1406,7 @@ function RaiddFormDialog({
                         {clientStakeholders.length > 0 && (
                           <>
                             <Separator className="my-1" />
-                            <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">Client Stakeholders</div>
+                            <div className="px-2 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400">Client Stakeholders</div>
                             {clientStakeholders.map(s => (
                               <SelectItem key={s.id} value={s.id}>{s.name}{s.stakeholderTitle ? ` (${s.stakeholderTitle})` : ''}</SelectItem>
                             ))}
@@ -1629,15 +1629,15 @@ function SupersedeDialog({
         </DialogHeader>
         <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">New Decision Title</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">New Decision Title</label>
             <Input {...form.register("title", { required: true })} placeholder="Title for the new decision" />
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">Description</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Description</label>
             <Textarea {...form.register("description")} rows={3} placeholder="Describe the new decision" />
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">Priority</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Priority</label>
             <Select value={form.watch("priority")} onValueChange={(v) => form.setValue("priority", v)}>
               <SelectTrigger>
                 <SelectValue />
@@ -1688,11 +1688,11 @@ function IngestTextDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">Text to Analyze</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Text to Analyze</label>
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} placeholder="Paste your text here..." />
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">Project Context (optional)</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Project Context (optional)</label>
             <Input value={projectContext} onChange={(e) => setProjectContext(e.target.value)} placeholder="Brief project context to improve analysis" />
           </div>
         </div>
@@ -1733,7 +1733,7 @@ function ExtractDecisionsDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">Document Text</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Document Text</label>
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={10} placeholder="Paste document content here..." />
           </div>
         </div>
@@ -1779,13 +1779,13 @@ function AiReviewDialog({
           </DialogDescription>
         </DialogHeader>
         {items.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
             <p>No items were detected. Try providing more detailed text.</p>
           </div>
         ) : (
           <div className="space-y-3">
             {items.map((item, idx) => (
-              <div key={item.id} className="flex items-start gap-3 p-3 border border-border rounded-lg">
+              <div key={item.id} className="flex items-start gap-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg">
                 <Checkbox
                   checked={item.selected}
                   onCheckedChange={(checked) => {
@@ -1869,7 +1869,7 @@ function SuggestMitigationDialog({
         <DialogContent className="max-w-md">
           <div className="flex flex-col items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
-            <p className="text-sm text-muted-foreground">AI is generating suggestions...</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">AI is generating suggestions...</p>
           </div>
         </DialogContent>
       </Dialog>
@@ -1889,17 +1889,17 @@ function SuggestMitigationDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-muted-foreground block mb-1">{fieldLabel}</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">{fieldLabel}</label>
             <Textarea value={editedText} onChange={(e) => setEditedText(e.target.value)} rows={4} />
           </div>
           {editedActions.length > 0 && (
             <div>
-              <label className="text-sm font-medium text-muted-foreground block mb-2">Suggested Action Items</label>
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-2">Suggested Action Items</label>
               <div className="space-y-2">
                 {editedActions.map((action: any, idx: number) => (
-                  <div key={idx} className="p-2 border border-border rounded text-sm">
+                  <div key={idx} className="p-2 border border-gray-200 dark:border-gray-700 rounded text-sm">
                     <div className="font-medium">{action.title}</div>
-                    {action.description && <div className="text-muted-foreground text-xs mt-1">{action.description}</div>}
+                    {action.description && <div className="text-gray-500 dark:text-gray-400 text-xs mt-1">{action.description}</div>}
                   </div>
                 ))}
               </div>
@@ -1945,7 +1945,7 @@ function SuggestActionsDialog({
               <Brain className="h-5 w-5" /> Suggested Action Items
             </DialogTitle>
           </DialogHeader>
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
             <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
             <p>AI is generating action item suggestions...</p>
           </div>
@@ -1967,7 +1967,7 @@ function SuggestActionsDialog({
         </DialogHeader>
         <div className="space-y-3">
           {actions.map((action, idx) => (
-            <div key={action.id} className="flex items-start gap-3 p-3 border border-border rounded-lg">
+            <div key={action.id} className="flex items-start gap-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg">
               <Checkbox
                 checked={action.selected}
                 onCheckedChange={(checked) => {

@@ -106,11 +106,10 @@ import {
   ArrowLeft, TrendingUp, TrendingDown, AlertTriangle, Clock, 
   DollarSign, Users, User, Calendar, CheckCircle, AlertCircle, Activity,
   Target, Zap, Briefcase, FileText, Plus, Edit, Trash2, ExternalLink,
-  Check, X, FileCheck, Lock, Filter, Download, Upload, Pencil, FolderOpen, Building, UserPlus, Sparkles, Code
+  Check, X, FileCheck, Lock, Filter, Download, Upload, Pencil, FolderOpen, Building, UserPlus, Sparkles
 } from "lucide-react";
 import { TimeEntryManagementDialog } from "@/components/time-entry-management-dialog";
 import { PlannerStatusPanel } from "@/components/planner/PlannerStatusPanel";
-import { TeamMembersPanel } from "@/components/planner/TeamMembersPanel";
 import { SubSOWGenerator } from "@/components/sub-sow-generator";
 import { StatusReportDialog } from "@/components/status-report-dialog";
 import { format, startOfMonth, parseISO } from "date-fns";
@@ -119,9 +118,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { useIsEmbedded } from "@/hooks/use-is-embedded";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { EmbedCodeDialog } from "@/components/embed-code-dialog";
 
 interface ProjectAnalytics {
   project: any;
@@ -243,7 +240,6 @@ type AssignmentFormData = z.infer<typeof assignmentFormSchema>;
 export default function ProjectDetail() {
   const { id } = useParams();
   const { user, canViewPricing } = useAuth();
-  const isEmbedded = useIsEmbedded();
   const [location, navigate] = useLocation();
   const searchString = useSearch();
   
@@ -306,17 +302,10 @@ export default function ProjectDetail() {
   const [importError, setImportError] = useState<string | null>(null);
   const [showAddMemberDialog, setShowAddMemberDialog] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState("");
-  const [teamRemovalPrompt, setTeamRemovalPrompt] = useState<{
-    personId: string;
-    personName: string;
-  } | null>(null);
   
   // Edit project state
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [projectToEdit, setProjectToEdit] = useState<any>(null);
-  
-  // Embed code dialog state
-  const [showEmbedDialog, setShowEmbedDialog] = useState(false);
   
   // Time entries state
   const [timeGrouping, setTimeGrouping] = useState<"none" | "month" | "workstream" | "stage">("none");
@@ -1296,42 +1285,18 @@ export default function ProjectDetail() {
     }
   });
 
-  const removeFromTeamMutation = useMutation({
-    mutationFn: async (personId: string) => {
-      return apiRequest(`/api/projects/${id}/team-members/${personId}/remove`, {
-        method: "DELETE"
-      });
-    },
-    onSuccess: () => {
-      setTeamRemovalPrompt(null);
-      queryClient.invalidateQueries({ queryKey: ['/api/projects', id, 'team-members'] });
-      toast({ title: "Member removed from Team" });
-    },
-    onError: () => {
-      setTeamRemovalPrompt(null);
-    }
-  });
-
   const deleteAssignmentMutation = useMutation({
     mutationFn: async (allocationId: string) => {
       return apiRequest(`/api/projects/${id}/allocations/${allocationId}`, {
         method: "DELETE"
       });
     },
-    onSuccess: (data: any) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/allocations`] });
-      queryClient.invalidateQueries({ queryKey: ['/api/projects', id, 'team-members'] });
       toast({
         title: "Success",
         description: "Assignment deleted successfully"
       });
-      if (data?.teamRemovalSuggested && data?.personId) {
-        const person = allocations.find(a => a.personId === data.personId)?.person;
-        setTeamRemovalPrompt({
-          personId: data.personId,
-          personName: person?.name || person?.username || "this person",
-        });
-      }
     },
     onError: (error: any) => {
       toast({
@@ -1875,13 +1840,11 @@ export default function ProjectDetail() {
         <div className="flex items-start justify-between">
           <div className="space-y-1 flex-1">
             <div className="flex items-center gap-2">
-              {!isEmbedded && (
-                <Link href="/projects">
-                  <Button variant="ghost" size="sm" data-testid="button-back">
-                    <ArrowLeft className="w-4 h-4" />
-                  </Button>
-                </Link>
-              )}
+              <Link href="/projects">
+                <Button variant="ghost" size="sm" data-testid="button-back">
+                  <ArrowLeft className="w-4 h-4" />
+                </Button>
+              </Link>
               <h2 className="text-3xl font-bold" data-testid="project-name">{project.name}</h2>
               <Badge variant={project.status === "active" ? "default" : "secondary"} data-testid="project-status">
                 {project.status}
@@ -1896,39 +1859,27 @@ export default function ProjectDetail() {
               </p>
             )}
           </div>
-          {!isEmbedded && (
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => setShowEmbedDialog(true)} data-testid="button-embed">
-                <Code className="w-4 h-4 mr-2" />
-                Embed
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowStatusReport(true)} data-testid="button-status-report">
-                <Sparkles className="w-4 h-4 mr-2" />
-                Status Report
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowExportDialog(true)} data-testid="button-export-report">
-                <Download className="w-4 h-4 mr-2" />
-                Export Data
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => {
-                setProjectToEdit(analytics.project);
-                setEditDialogOpen(true);
-              }} data-testid="button-edit-project">
-                <Edit className="w-4 h-4 mr-2" />
-                Edit Project
-              </Button>
-              <Badge className={`${health.color} text-white`} data-testid="health-status">
-                <health.icon className="w-3 h-3 mr-1" />
-                {health.status}
-              </Badge>
-            </div>
-          )}
-          {isEmbedded && (
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setShowStatusReport(true)} data-testid="button-status-report">
+              <Sparkles className="w-4 h-4 mr-2" />
+              Status Report
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowExportDialog(true)} data-testid="button-export-report">
+              <Download className="w-4 h-4 mr-2" />
+              Export Data
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => {
+              setProjectToEdit(analytics.project);
+              setEditDialogOpen(true);
+            }} data-testid="button-edit-project">
+              <Edit className="w-4 h-4 mr-2" />
+              Edit Project
+            </Button>
             <Badge className={`${health.color} text-white`} data-testid="health-status">
               <health.icon className="w-3 h-3 mr-1" />
               {health.status}
             </Badge>
-          )}
+          </div>
         </div>
 
         {/* Key Metrics */}
@@ -2854,8 +2805,6 @@ export default function ProjectDetail() {
               clientTeamId={analytics?.project?.client?.microsoftTeamId}
               clientId={analytics?.project?.clientId}
             />
-            
-            <TeamMembersPanel projectId={id || ""} />
             
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
@@ -6350,43 +6299,6 @@ export default function ProjectDetail() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
-
-      <AlertDialog open={!!teamRemovalPrompt} onOpenChange={(open) => !open && setTeamRemovalPrompt(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove from Microsoft Team?</AlertDialogTitle>
-            <AlertDialogDescription>
-              <strong>{teamRemovalPrompt?.personName}</strong> no longer has any assignments on this project
-              and has no other active projects for this client.
-              Would you like to remove them from the Microsoft Team?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep in Team</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (teamRemovalPrompt) {
-                  removeFromTeamMutation.mutate(teamRemovalPrompt.personId);
-                }
-              }}
-              disabled={removeFromTeamMutation.isPending}
-            >
-              {removeFromTeamMutation.isPending ? "Removing..." : "Remove from Team"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {id && project && (
-        <EmbedCodeDialog
-          open={showEmbedDialog}
-          onOpenChange={setShowEmbedDialog}
-          projectId={id}
-          projectName={project.name}
-          defaultTab={selectedTab}
-        />
-      )}
     </Layout>
     </ProjectDetailErrorBoundary>
   );

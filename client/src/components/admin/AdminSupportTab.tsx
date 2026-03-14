@@ -39,7 +39,6 @@ interface TicketListItem {
   status: string;
   createdAt: string;
   updatedAt: string;
-  author?: { id: string; firstName: string | null; lastName: string | null; email: string | null } | null;
 }
 
 interface TicketReply {
@@ -203,14 +202,6 @@ export function AdminSupportTab() {
 
   const { data: tickets, isLoading } = useQuery<TicketListItem[]>({
     queryKey: ["/api/support/tickets", filters],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (filters.status) params.set("status", filters.status);
-      if (filters.priority) params.set("priority", filters.priority);
-      if (filters.category) params.set("category", filters.category);
-      const qs = params.toString();
-      return await apiRequest(`/api/support/tickets${qs ? `?${qs}` : ""}`);
-    },
   });
 
   const openCount = tickets?.filter((t) => t.status === "open").length ?? 0;
@@ -496,13 +487,6 @@ export function AdminSupportTab() {
                     <p className="font-medium truncate" data-testid={`text-ticket-subject-${ticket.id}`}>
                       {ticket.subject}
                     </p>
-                    {ticket.author && (
-                      <p className="text-xs text-muted-foreground" data-testid={`text-ticket-author-${ticket.id}`}>
-                        Submitted by {ticket.author.firstName || ticket.author.lastName
-                          ? `${ticket.author.firstName || ""} ${ticket.author.lastName || ""}`.trim()
-                          : ticket.author.email || "Unknown"}
-                      </p>
-                    )}
                   </div>
                   <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
                     <Clock className="h-3 w-3" />

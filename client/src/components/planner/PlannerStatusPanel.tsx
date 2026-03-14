@@ -8,19 +8,12 @@ import { Label } from "@/components/ui/label";
 import { 
   RefreshCw, 
   ExternalLink, 
+  Settings, 
   Unlink,
   CheckCircle,
   AlertCircle,
   Clock,
-  Loader2,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  AlertTriangle,
-  Webhook,
-  ChevronDown,
-  ChevronUp,
-  X,
-  Check
+  Loader2
 } from "lucide-react";
 import { MicrosoftPlannerIcon } from "@/components/icons/microsoft-icons";
 import { useToast } from "@/hooks/use-toast";
@@ -37,12 +30,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 interface PlannerStatusPanelProps {
   projectId: string;
@@ -50,28 +37,6 @@ interface PlannerStatusPanelProps {
   clientName?: string;
   clientTeamId?: string;
   clientId?: string;
-}
-
-interface SyncLogEntry {
-  id: string;
-  direction: string;
-  action: string;
-  allocationId?: string;
-  taskId?: string;
-  details?: string;
-  createdAt: string;
-  resolvedAt?: string;
-}
-
-interface SyncRecord {
-  id: string;
-  allocationId: string;
-  taskId: string;
-  taskTitle: string;
-  bucketName: string;
-  syncStatus: string;
-  syncError?: string;
-  lastSyncedAt: string;
 }
 
 interface SyncStatus {
@@ -86,23 +51,22 @@ interface SyncStatus {
     autoAddMembers?: boolean;
     lastSyncAt?: string;
     lastSyncStatus?: string;
-    lastInboundSyncAt?: string;
-    lastOutboundSyncAt?: string;
-    webhookActive?: boolean;
   };
   syncedTasks: number;
-  conflictCount?: number;
-  syncs?: SyncRecord[];
-  unresolvedLogs?: SyncLogEntry[];
-  recentLogs?: SyncLogEntry[];
+  syncs?: Array<{
+    allocationId: string;
+    taskId: string;
+    taskTitle: string;
+    bucketName: string;
+    syncStatus: string;
+    lastSyncedAt: string;
+  }>;
 }
 
 export function PlannerStatusPanel({ projectId, projectName, clientName, clientTeamId, clientId }: PlannerStatusPanelProps) {
   const { toast } = useToast();
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
-  const [showSyncDetails, setShowSyncDetails] = useState(false);
-  const [showActivityLog, setShowActivityLog] = useState(false);
 
   const { data: syncStatus, isLoading } = useQuery<SyncStatus>({
     queryKey: ["/api/projects", projectId, "planner-sync-status"]
@@ -182,37 +146,6 @@ export function PlannerStatusPanel({ projectId, projectName, clientName, clientT
     }
   });
 
-  const resolveConflictMutation = useMutation({
-    mutationFn: async ({ syncId, resolution, logId }: { syncId: string; resolution: string; logId?: string }) => {
-      return await apiRequest(`/api/projects/${projectId}/planner-sync/resolve-conflict`, {
-        method: "POST",
-        body: JSON.stringify({ syncId, resolution, logId })
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "planner-sync-status"] });
-      toast({ title: "Conflict resolved" });
-    },
-    onError: (error: any) => {
-      toast({ title: "Failed to resolve conflict", description: error.message, variant: "destructive" });
-    }
-  });
-
-  const dismissLogMutation = useMutation({
-    mutationFn: async (logId: string) => {
-      return await apiRequest(`/api/projects/${projectId}/planner-sync/dismiss-log`, {
-        method: "POST",
-        body: JSON.stringify({ logId })
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "planner-sync-status"] });
-    },
-    onError: (error: any) => {
-      toast({ title: "Failed to dismiss", description: error.message, variant: "destructive" });
-    }
-  });
-
   if (isLoading) {
     return (
       <Card>
@@ -262,14 +195,6 @@ export function PlannerStatusPanel({ projectId, projectName, clientName, clientT
     ? formatDistanceToNow(new Date(connection.lastSyncAt), { addSuffix: true })
     : "Never";
 
-  const lastInboundTime = connection.lastInboundSyncAt
-    ? formatDistanceToNow(new Date(connection.lastInboundSyncAt), { addSuffix: true })
-    : null;
-
-  const lastOutboundTime = connection.lastOutboundSyncAt
-    ? formatDistanceToNow(new Date(connection.lastOutboundSyncAt), { addSuffix: true })
-    : null;
-
   const getSyncStatusIcon = (status?: string) => {
     switch (status) {
       case "success":
@@ -283,26 +208,6 @@ export function PlannerStatusPanel({ projectId, projectName, clientName, clientT
     }
   };
 
-  const getActionBadge = (action: string) => {
-    switch (action) {
-      case 'status_update':
-        return <Badge variant="outline" className="text-blue-600 border-blue-600 text-xs">Status</Badge>;
-      case 'date_update':
-        return <Badge variant="outline" className="text-purple-600 border-purple-600 text-xs">Dates</Badge>;
-      case 'reassignment':
-        return <Badge variant="outline" className="text-orange-600 border-orange-600 text-xs">Reassigned</Badge>;
-      case 'deletion':
-        return <Badge variant="outline" className="text-red-600 border-red-600 text-xs">Deleted</Badge>;
-      case 'conflict':
-        return <Badge variant="outline" className="text-yellow-600 border-yellow-600 text-xs">Conflict</Badge>;
-      default:
-        return <Badge variant="outline" className="text-xs">{action}</Badge>;
-    }
-  };
-
-  const conflicts = syncStatus.syncs?.filter(s => s.syncStatus === 'conflict') || [];
-  const unresolvedLogs = syncStatus.unresolvedLogs || [];
-
   return (
     <>
       <Card data-testid="planner-connected">
@@ -314,21 +219,6 @@ export function PlannerStatusPanel({ projectId, projectName, clientName, clientT
               <Badge variant="outline" className="text-green-600 border-green-600">
                 Connected
               </Badge>
-              {connection.webhookActive && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <Badge variant="outline" className="text-blue-600 border-blue-600 gap-1">
-                        <Webhook className="h-3 w-3" />
-                        Real-time
-                      </Badge>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Receiving real-time updates via Microsoft Graph webhooks
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -369,154 +259,7 @@ export function PlannerStatusPanel({ projectId, projectName, clientName, clientT
                 {connection.syncDirection?.replace('_', ' ') || 'Bidirectional'}
               </span>
             </div>
-            {(syncStatus.conflictCount || 0) > 0 && (
-              <div className="flex items-center gap-1">
-                <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                <span className="text-yellow-600 font-medium">{syncStatus.conflictCount} conflict(s)</span>
-              </div>
-            )}
           </div>
-
-          {(lastInboundTime || lastOutboundTime) && (
-            <div className="flex gap-4 text-xs text-muted-foreground pt-2 border-t">
-              {lastOutboundTime && (
-                <div className="flex items-center gap-1">
-                  <ArrowUpFromLine className="h-3 w-3" />
-                  <span>Outbound: {lastOutboundTime}</span>
-                </div>
-              )}
-              {lastInboundTime && (
-                <div className="flex items-center gap-1">
-                  <ArrowDownToLine className="h-3 w-3" />
-                  <span>Inbound: {lastInboundTime}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {conflicts.length > 0 && (
-            <div className="space-y-2 pt-2 border-t">
-              <h4 className="text-sm font-medium flex items-center gap-1">
-                <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                Sync Conflicts
-              </h4>
-              {conflicts.map(conflict => {
-                let conflictInfo: { message?: string; fields?: { field: string; local: string; remote: string }[] } = {};
-                try {
-                  if (conflict.syncError) {
-                    conflictInfo = JSON.parse(conflict.syncError);
-                  }
-                } catch {
-                  conflictInfo = { message: conflict.syncError || '' };
-                }
-
-                return (
-                  <div key={conflict.id} className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-3 text-sm">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium">{conflict.taskTitle}</span>
-                      <div className="flex gap-1">
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs"
-                                onClick={() => resolveConflictMutation.mutate({ syncId: conflict.id, resolution: 'keep_local' })}
-                                disabled={resolveConflictMutation.isPending}
-                              >
-                                <ArrowUpFromLine className="h-3 w-3 mr-1" />
-                                Keep Local
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Push Constellation data to Planner</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs"
-                                onClick={() => resolveConflictMutation.mutate({ syncId: conflict.id, resolution: 'keep_remote' })}
-                                disabled={resolveConflictMutation.isPending}
-                              >
-                                <ArrowDownToLine className="h-3 w-3 mr-1" />
-                                Keep Planner
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Accept Planner data into Constellation</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => resolveConflictMutation.mutate({ syncId: conflict.id, resolution: 'dismiss' })}
-                          disabled={resolveConflictMutation.isPending}
-                        >
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                    {conflictInfo.fields && conflictInfo.fields.length > 0 ? (
-                      <div className="mt-1 space-y-1">
-                        {conflictInfo.fields.map((f, idx) => (
-                          <div key={idx} className="grid grid-cols-3 gap-2 text-xs border-t border-yellow-200 dark:border-yellow-700 pt-1">
-                            <span className="font-medium text-muted-foreground">{f.field}</span>
-                            <span className="text-blue-700 dark:text-blue-400" title="Constellation value">Local: {f.local}</span>
-                            <span className="text-orange-700 dark:text-orange-400" title="Planner value">Planner: {f.remote}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">{conflictInfo.message || 'Concurrent changes detected'}</p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {unresolvedLogs.length > 0 && (
-            <div className="space-y-2 pt-2 border-t">
-              <h4 className="text-sm font-medium flex items-center gap-1">
-                <AlertCircle className="h-4 w-4 text-orange-500" />
-                Items Requiring Review ({unresolvedLogs.length})
-              </h4>
-              {unresolvedLogs.slice(0, 5).map(log => (
-                <div key={log.id} className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-md p-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {log.direction === 'inbound' ? (
-                        <ArrowDownToLine className="h-3 w-3 text-muted-foreground" />
-                      ) : (
-                        <ArrowUpFromLine className="h-3 w-3 text-muted-foreground" />
-                      )}
-                      {getActionBadge(log.action)}
-                      <span className="text-xs">{log.details}</span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 text-xs"
-                      onClick={() => dismissLogMutation.mutate(log.id)}
-                      disabled={dismissLogMutation.isPending}
-                    >
-                      <Check className="h-3 w-3 mr-1" />
-                      Dismiss
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              {unresolvedLogs.length > 5 && (
-                <p className="text-xs text-muted-foreground">
-                  + {unresolvedLogs.length - 5} more items
-                </p>
-              )}
-            </div>
-          )}
 
           <div className="space-y-3 pt-4 border-t">
             <div className="flex items-center justify-between">
@@ -547,64 +290,30 @@ export function PlannerStatusPanel({ projectId, projectName, clientName, clientT
               )}
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-end gap-2">
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setShowActivityLog(!showActivityLog)}
-                className="text-xs text-muted-foreground"
+                onClick={() => {
+                  const planUrl = `https://tasks.office.com/Home/PlanViews/${connection.planId}`;
+                  window.open(planUrl, '_blank');
+                }}
               >
-                {showActivityLog ? <ChevronUp className="h-3 w-3 mr-1" /> : <ChevronDown className="h-3 w-3 mr-1" />}
-                {showActivityLog ? 'Hide' : 'Show'} Activity Log
+                <ExternalLink className="h-4 w-4 mr-1" />
+                Open Plan in Planner
               </Button>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    const planUrl = `https://tasks.office.com/Home/PlanViews/${connection.planId}`;
-                    window.open(planUrl, '_blank');
-                  }}
-                >
-                  <ExternalLink className="h-4 w-4 mr-1" />
-                  Open Plan in Planner
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowDisconnectDialog(true)}
-                  className="text-destructive hover:text-destructive"
-                  data-testid="button-disconnect-planner"
-                >
-                  <Unlink className="h-4 w-4 mr-1" />
-                  Disconnect
-                </Button>
-              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDisconnectDialog(true)}
+                className="text-destructive hover:text-destructive"
+                data-testid="button-disconnect-planner"
+              >
+                <Unlink className="h-4 w-4 mr-1" />
+                Disconnect
+              </Button>
             </div>
           </div>
-
-          {showActivityLog && syncStatus.recentLogs && syncStatus.recentLogs.length > 0 && (
-            <div className="space-y-1 pt-2 border-t">
-              <h4 className="text-xs font-medium text-muted-foreground mb-2">Recent Sync Activity</h4>
-              {syncStatus.recentLogs.map(log => (
-                <div key={log.id} className="flex items-center gap-2 text-xs py-1">
-                  {log.direction === 'inbound' ? (
-                    <ArrowDownToLine className="h-3 w-3 text-blue-500 flex-shrink-0" />
-                  ) : (
-                    <ArrowUpFromLine className="h-3 w-3 text-green-500 flex-shrink-0" />
-                  )}
-                  {getActionBadge(log.action)}
-                  <span className="text-muted-foreground truncate flex-1">{log.details}</span>
-                  <span className="text-muted-foreground flex-shrink-0">
-                    {formatDistanceToNow(new Date(log.createdAt), { addSuffix: true })}
-                  </span>
-                  {log.resolvedAt && (
-                    <CheckCircle className="h-3 w-3 text-green-500 flex-shrink-0" />
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
         </CardContent>
       </Card>
 

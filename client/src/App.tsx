@@ -53,16 +53,6 @@ import MyRaidd from "@/pages/my-raidd";
 import CrmDeals from "@/pages/crm-deals";
 import AiSettings from "@/pages/ai-settings";
 import NotFound from "@/pages/not-found";
-import TitleSlide from "@/pages/slides/TitleSlide";
-import ProblemSlide from "@/pages/slides/ProblemSlide";
-import PlatformOverviewSlide from "@/pages/slides/PlatformOverviewSlide";
-import EstimateScopeSlide from "@/pages/slides/EstimateScopeSlide";
-import ProjectDeliverySlide from "@/pages/slides/ProjectDeliverySlide";
-import TimeExpensesSlide from "@/pages/slides/TimeExpensesSlide";
-import InvoicingSlide from "@/pages/slides/InvoicingSlide";
-import AIIntegrationSlide from "@/pages/slides/AIIntegrationSlide";
-import SecuritySlide from "@/pages/slides/SecuritySlide";
-import ClosingSlide from "@/pages/slides/ClosingSlide";
 import { useQuery } from "@tanstack/react-query";
 import { Redirect, useLocation } from "wouter";
 import { useEffect, useState } from "react";
@@ -379,17 +369,6 @@ function Router() {
       <Route path="/support">
         {user ? <Support /> : <Redirect to="/login" />}
       </Route>
-      {/* Pitch Deck Slides */}
-      <Route path="/slide1" component={TitleSlide} />
-      <Route path="/slide2" component={ProblemSlide} />
-      <Route path="/slide3" component={PlatformOverviewSlide} />
-      <Route path="/slide4" component={EstimateScopeSlide} />
-      <Route path="/slide5" component={ProjectDeliverySlide} />
-      <Route path="/slide6" component={TimeExpensesSlide} />
-      <Route path="/slide7" component={InvoicingSlide} />
-      <Route path="/slide8" component={AIIntegrationSlide} />
-      <Route path="/slide9" component={SecuritySlide} />
-      <Route path="/slide10" component={ClosingSlide} />
       {/* Fallback to 404 */}
       <Route component={NotFound} />
     </Switch>

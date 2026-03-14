@@ -168,10 +168,6 @@ export const tenants = pgTable("tenants", {
   speMigrationStatus: text("spe_migration_status"),
   speMigrationStartedAt: timestamp("spe_migration_started_at"),
 
-  // M365 Teams Integration Settings
-  m365AutoProvisionTeams: boolean("m365_auto_provision_teams").default(false),
-  m365DefaultTeamTemplate: text("m365_default_team_template").default("standard"),
-
   // Timestamps
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
@@ -319,7 +315,6 @@ export const clients = pgTable("clients", {
   // Microsoft Teams integration
   microsoftTeamId: text("microsoft_team_id"), // Azure Group/Team ID for this client
   microsoftTeamName: text("microsoft_team_name"), // Display name of the Team
-  sharepointSiteUrl: text("sharepoint_site_url"), // Team's SharePoint site URL for status report publishing
   // Payment terms override (e.g., "Net 30", "Net 45", "Due Upon Receipt")
   paymentTerms: text("payment_terms"), // Overrides tenant default when set
   // Payment method for invoices (e.g., "ACH Transfer", "Check", "Wire Transfer")
@@ -328,90 +323,6 @@ export const clients = pgTable("clients", {
 }, (table) => ({
   tenantIdx: index("idx_clients_tenant").on(table.tenantId),
 }));
-
-// Client-to-Team mapping
-export const clientTeams = pgTable("client_teams", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  teamId: varchar("team_id", { length: 255 }).notNull(),
-  teamName: text("team_name"),
-  teamWebUrl: text("team_web_url"),
-  sharepointSiteId: varchar("sharepoint_site_id", { length: 255 }),
-  sharepointSiteUrl: text("sharepoint_site_url"),
-  createdBy: varchar("created_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  clientIdx: index("idx_client_teams_client").on(table.clientId),
-  tenantIdx: index("idx_client_teams_tenant").on(table.tenantId),
-  uniqueClient: unique("uq_client_teams_client").on(table.clientId),
-}));
-
-export const insertClientTeamSchema = createInsertSchema(clientTeams).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertClientTeam = z.infer<typeof insertClientTeamSchema>;
-export type ClientTeam = typeof clientTeams.$inferSelect;
-
-// Project-to-Channel mapping
-export const projectChannels = pgTable("project_channels", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  channelId: varchar("channel_id", { length: 255 }).notNull(),
-  channelName: text("channel_name"),
-  channelWebUrl: text("channel_web_url"),
-  plannerPlanId: varchar("planner_plan_id", { length: 255 }),
-  plannerPlanWebUrl: text("planner_plan_web_url"),
-  createdBy: varchar("created_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  projectIdx: index("idx_project_channels_project").on(table.projectId),
-  tenantIdx: index("idx_project_channels_tenant").on(table.tenantId),
-  uniqueProject: unique("uq_project_channels_project").on(table.projectId),
-}));
-
-export const insertProjectChannelSchema = createInsertSchema(projectChannels).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertProjectChannel = z.infer<typeof insertProjectChannelSchema>;
-export type ProjectChannel = typeof projectChannels.$inferSelect;
-
-// Teams folder templates - configurable folder structure for new channels
-export const teamsFolderTemplates = pgTable("teams_folder_templates", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  folderName: text("folder_name").notNull(),
-  sortOrder: integer("sort_order").notNull().default(0),
-  scope: text("scope").notNull().default("system"),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantScopeIdx: index("idx_folder_templates_tenant_scope").on(table.tenantId, table.scope),
-}));
-
-export const insertTeamsFolderTemplateSchema = createInsertSchema(teamsFolderTemplates).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertTeamsFolderTemplate = z.infer<typeof insertTeamsFolderTemplateSchema>;
-export type TeamsFolderTemplate = typeof teamsFolderTemplates.$inferSelect;
-
-export const DEFAULT_FOLDER_TEMPLATES = [
-  "Deliverables",
-  "SOW & Contracts",
-  "Meeting Notes",
-  "Status Reports",
-  "Working Documents",
-];
 
 // Roles (for rate management)
 export const roles = pgTable("roles", {
@@ -2614,9 +2525,6 @@ export const projectPlannerConnections = pgTable("project_planner_connections", 
   lastSyncAt: timestamp("last_sync_at"),
   lastSyncStatus: text("last_sync_status"), // success, error, partial
   lastSyncError: text("last_sync_error"),
-  lastInboundSyncAt: timestamp("last_inbound_sync_at"),
-  lastOutboundSyncAt: timestamp("last_outbound_sync_at"),
-  webhookActive: boolean("webhook_active").notNull().default(false),
   
   // Metadata
   connectedBy: varchar("connected_by").references(() => users.id),
@@ -2663,48 +2571,6 @@ export const insertPlannerTaskSyncSchema = createInsertSchema(plannerTaskSync).o
 });
 export type InsertPlannerTaskSync = z.infer<typeof insertPlannerTaskSyncSchema>;
 export type PlannerTaskSync = typeof plannerTaskSync.$inferSelect;
-
-// Planner webhook subscriptions - tracks Microsoft Graph webhook subscriptions for real-time sync
-export const plannerWebhookSubscriptions = pgTable("planner_webhook_subscriptions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  connectionId: varchar("connection_id").notNull().references(() => projectPlannerConnections.id, { onDelete: 'cascade' }),
-  subscriptionId: varchar("subscription_id", { length: 255 }).notNull(),
-  resource: text("resource").notNull(),
-  expiresAt: timestamp("expires_at").notNull(),
-  clientState: varchar("client_state", { length: 255 }).notNull(),
-  status: text("status").notNull().default('active'),
-  lastNotificationAt: timestamp("last_notification_at"),
-  renewalFailures: integer("renewal_failures").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const insertPlannerWebhookSubscriptionSchema = createInsertSchema(plannerWebhookSubscriptions).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertPlannerWebhookSubscription = z.infer<typeof insertPlannerWebhookSubscriptionSchema>;
-export type PlannerWebhookSubscription = typeof plannerWebhookSubscriptions.$inferSelect;
-
-// Planner sync log - detailed log of sync operations for audit and debugging
-export const plannerSyncLogs = pgTable("planner_sync_logs", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  connectionId: varchar("connection_id").notNull().references(() => projectPlannerConnections.id, { onDelete: 'cascade' }),
-  direction: text("direction").notNull(), // inbound, outbound
-  action: text("action").notNull(), // status_update, date_update, reassignment, deletion, conflict
-  allocationId: varchar("allocation_id"),
-  taskId: varchar("task_id", { length: 255 }),
-  details: text("details"),
-  resolvedAt: timestamp("resolved_at"),
-  resolvedBy: varchar("resolved_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const insertPlannerSyncLogSchema = createInsertSchema(plannerSyncLogs).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertPlannerSyncLog = z.infer<typeof insertPlannerSyncLogSchema>;
-export type PlannerSyncLog = typeof plannerSyncLogs.$inferSelect;
 
 // User-to-Azure AD mapping - maps Constellation users to Azure AD users for task assignment
 export const userAzureMappings = pgTable("user_azure_mappings", {
