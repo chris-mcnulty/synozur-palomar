@@ -3290,6 +3290,45 @@ export async function registerRoutes(app: Express): Promise<void> {
       // Auto-create or reactivate engagement when a person is assigned
       if (validatedData.personId) {
         await storage.ensureProjectEngagement(req.params.projectId, validatedData.personId);
+        
+        (async () => {
+          try {
+            const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+            if (connection?.autoAddMembers && connection.groupId) {
+              const person = await storage.getUser(validatedData.personId);
+              if (person?.email) {
+                const { plannerService } = await import('./services/planner-service');
+                let azureMapping = await storage.getUserAzureMappingByEmail(person.email);
+                if (!azureMapping) {
+                  azureMapping = await storage.getUserAzureMapping(validatedData.personId);
+                }
+                if (!azureMapping) {
+                  const azureUser = await plannerService.findUserByEmail(person.email);
+                  if (azureUser) {
+                    azureMapping = await storage.createUserAzureMapping({
+                      userId: validatedData.personId,
+                      azureUserId: azureUser.id,
+                      azureUserPrincipalName: azureUser.userPrincipalName,
+                      azureDisplayName: azureUser.displayName,
+                      mappingMethod: 'auto_discovered',
+                      verifiedAt: new Date()
+                    });
+                  }
+                }
+                if (azureMapping) {
+                  const addResult = await plannerService.addTeamMember(connection.groupId, azureMapping.azureUserId);
+                  if (addResult) {
+                    console.log('[PLANNER] Auto-added user to Team on allocation:', person.email);
+                  } else {
+                    console.warn('[PLANNER] Failed to auto-add user to Team:', person.email);
+                  }
+                }
+              }
+            }
+          } catch (autoAddErr: any) {
+            console.warn('[PLANNER] Auto-add to Team failed (non-blocking):', autoAddErr.message);
+          }
+        })();
       }
       
       res.status(201).json(created);
@@ -3362,7 +3401,39 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   app.delete("/api/projects/:projectId/allocations/:id", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
     try {
+      const allocation = await storage.getProjectAllocation(req.params.id);
       await storage.deleteProjectAllocation(req.params.id);
+      
+      if (allocation?.personId) {
+        try {
+          const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+          if (connection?.groupId) {
+            const remainingAllocations = await storage.getProjectAllocations(req.params.projectId);
+            const stillAssigned = remainingAllocations.some(a => a.personId === allocation.personId);
+            
+            if (!stillAssigned) {
+              const project = await storage.getProject(req.params.projectId);
+              let hasOtherClientProjects = false;
+              if (project?.clientId) {
+                const userAllocations = await storage.getUserAllocations(allocation.personId);
+                hasOtherClientProjects = userAllocations.some(a => 
+                  a.project?.clientId === project.clientId && a.projectId !== req.params.projectId
+                );
+              }
+              
+              return res.json({ 
+                deleted: true,
+                teamRemovalSuggested: !hasOtherClientProjects,
+                personId: allocation.personId,
+                teamId: connection.groupId,
+              });
+            }
+          }
+        } catch (err: any) {
+          console.warn('[PLANNER] Error checking team removal eligibility:', err.message);
+        }
+      }
+      
       res.status(204).send();
     } catch (error: any) {
       console.error("[ERROR] Failed to delete project allocation:", error);
@@ -5587,6 +5658,236 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
     } catch (error: any) {
       console.error("[PLANNER] Failed to dismiss log:", error);
       res.status(500).json({ message: "Failed to dismiss log entry" });
+    }
+  });
+
+  // ============ TEAM MEMBER MANAGEMENT ENDPOINTS ============
+
+  app.get("/api/projects/:projectId/team-members", requireAuth, async (req, res) => {
+    try {
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      if (!connection || !connection.groupId) {
+        return res.json({ members: [], hasConnection: false });
+      }
+
+      const allocations = await storage.getProjectAllocations(req.params.projectId);
+      const uniquePersonIds = [...new Set(allocations.filter(a => a.personId).map(a => a.personId))];
+
+      const { plannerService } = await import('./services/planner-service');
+
+      let actualTeamMembers: any[] = [];
+      let teamFetchSucceeded = false;
+      try {
+        actualTeamMembers = await plannerService.getTeamMembers(connection.groupId);
+        teamFetchSucceeded = true;
+      } catch (err: any) {
+        console.warn('[PLANNER] Could not fetch actual team members:', err.message);
+      }
+
+      const actualMemberAzureIds = new Set(actualTeamMembers.map(m => m.id));
+
+      const members = await Promise.all(
+        uniquePersonIds.map(async (personId) => {
+          const person = allocations.find(a => a.personId === personId)?.person;
+          if (!person) return null;
+
+          let azureMapping = await storage.getUserAzureMappingByEmail(person.email);
+          if (!azureMapping) {
+            azureMapping = await storage.getUserAzureMapping(personId);
+          }
+
+          let teamMembershipStatus: 'added' | 'not_in_azure_ad' | 'not_in_team' | 'pending' = 'not_in_azure_ad';
+
+          if (azureMapping) {
+            if (teamFetchSucceeded) {
+              teamMembershipStatus = actualMemberAzureIds.has(azureMapping.azureUserId) ? 'added' : 'not_in_team';
+            } else {
+              teamMembershipStatus = 'pending';
+            }
+          }
+
+          return {
+            personId,
+            name: person.name || person.username,
+            email: person.email,
+            azureUserId: azureMapping?.azureUserId || null,
+            azureDisplayName: azureMapping?.azureDisplayName || null,
+            mappingMethod: azureMapping?.mappingMethod || null,
+            teamMembershipStatus,
+            isAssigned: true,
+          };
+        })
+      );
+
+      const assignedAzureIds = new Set(
+        members.filter(m => m?.azureUserId).map(m => m!.azureUserId)
+      );
+      const unassignedTeamMembers = await Promise.all(
+        actualTeamMembers
+          .filter(tm => !assignedAzureIds.has(tm.id))
+          .map(async (tm) => {
+            let localPersonId: string | null = null;
+            try {
+              const mapping = await storage.getUserAzureMappingByAzureId(tm.id);
+              if (mapping) localPersonId = mapping.userId;
+            } catch {}
+            return {
+              personId: localPersonId,
+              name: tm.displayName,
+              email: tm.mail || tm.userPrincipalName || '',
+              azureUserId: tm.id,
+              azureDisplayName: tm.displayName,
+              mappingMethod: null,
+              teamMembershipStatus: 'added' as const,
+              isAssigned: false,
+            };
+          })
+      );
+
+      res.json({
+        members: [...members.filter(Boolean), ...unassignedTeamMembers],
+        hasConnection: true,
+        teamId: connection.groupId,
+        teamName: connection.groupName,
+        autoAddMembers: connection.autoAddMembers,
+      });
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to get team members:", error);
+      res.status(500).json({ message: "Failed to get team members" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/team-members/:userId/add", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      if (!connection || !connection.groupId) {
+        return res.status(400).json({ message: "No Planner connection or Team configured for this project" });
+      }
+
+      const { plannerService } = await import('./services/planner-service');
+      const person = await storage.getUser(req.params.userId);
+      if (!person) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      let azureMapping = person.email ? await storage.getUserAzureMappingByEmail(person.email) : null;
+      if (!azureMapping) {
+        azureMapping = await storage.getUserAzureMapping(req.params.userId);
+      }
+
+      if (!azureMapping && person.email) {
+        const azureUser = await plannerService.findUserByEmail(person.email);
+        if (azureUser) {
+          azureMapping = await storage.createUserAzureMapping({
+            userId: req.params.userId,
+            azureUserId: azureUser.id,
+            azureUserPrincipalName: azureUser.userPrincipalName,
+            azureDisplayName: azureUser.displayName,
+            mappingMethod: 'auto_discovered',
+            verifiedAt: new Date()
+          });
+        }
+      }
+
+      if (!azureMapping) {
+        return res.status(400).json({ message: "Could not find user in Azure AD. Please verify their email address." });
+      }
+
+      const addResult = await plannerService.addTeamMember(connection.groupId, azureMapping.azureUserId);
+      if (addResult) {
+        res.json({ success: true, message: "User added to Team successfully" });
+      } else {
+        res.status(500).json({ message: "Failed to add user to Team" });
+      }
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to add team member:", error);
+      res.status(500).json({ message: "Failed to add team member" });
+    }
+  });
+
+  app.delete("/api/projects/:projectId/team-members/:userId/remove", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      if (!connection || !connection.groupId) {
+        return res.status(400).json({ message: "No Planner connection or Team configured for this project" });
+      }
+
+      const { plannerService } = await import('./services/planner-service');
+      const userId = req.params.userId;
+
+      let azureUserId: string | null = null;
+
+      const azureMapping = await storage.getUserAzureMapping(userId);
+      if (azureMapping) {
+        azureUserId = azureMapping.azureUserId;
+      } else {
+        const person = await storage.getUser(userId);
+        if (person?.email) {
+          const emailMapping = await storage.getUserAzureMappingByEmail(person.email);
+          if (emailMapping) {
+            azureUserId = emailMapping.azureUserId;
+          }
+        }
+      }
+
+      if (!azureUserId) {
+        const azureIdMapping = await storage.getUserAzureMappingByAzureId(userId);
+        if (azureIdMapping) {
+          azureUserId = azureIdMapping.azureUserId;
+        } else {
+          azureUserId = userId;
+        }
+      }
+
+      const removed = await plannerService.removeTeamMember(connection.groupId, azureUserId);
+      if (removed) {
+        res.json({ success: true, message: "User removed from Team successfully" });
+      } else {
+        res.status(500).json({ message: "Failed to remove user from Team" });
+      }
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to remove team member:", error);
+      res.status(500).json({ message: "Failed to remove team member" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/team-members/:userId/retry-mapping", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const { plannerService } = await import('./services/planner-service');
+      const person = await storage.getUser(req.params.userId);
+      if (!person?.email) {
+        return res.status(400).json({ message: "User has no email address" });
+      }
+
+      const azureUser = await plannerService.findUserByEmail(person.email);
+      if (!azureUser) {
+        return res.status(404).json({ message: "User not found in Azure AD" });
+      }
+
+      const existing = await storage.getUserAzureMapping(req.params.userId);
+      if (existing) {
+        await storage.updateUserAzureMapping(existing.id, {
+          azureUserId: azureUser.id,
+          azureUserPrincipalName: azureUser.userPrincipalName,
+          azureDisplayName: azureUser.displayName,
+          mappingMethod: 'auto_discovered',
+          verifiedAt: new Date()
+        });
+      } else {
+        await storage.createUserAzureMapping({
+          userId: req.params.userId,
+          azureUserId: azureUser.id,
+          azureUserPrincipalName: azureUser.userPrincipalName,
+          azureDisplayName: azureUser.displayName,
+          mappingMethod: 'auto_discovered',
+          verifiedAt: new Date()
+        });
+      }
+
+      res.json({ success: true, azureUser: { id: azureUser.id, displayName: azureUser.displayName } });
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to retry mapping:", error);
+      res.status(500).json({ message: "Failed to retry Azure AD mapping" });
     }
   });
 

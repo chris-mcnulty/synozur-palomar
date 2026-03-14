@@ -555,6 +555,45 @@ class PlannerService {
     }
   }
 
+  async removeTeamMember(teamId: string, azureUserId: string): Promise<boolean> {
+    try {
+      console.log('[PLANNER] Removing member from team:', teamId, 'user:', azureUserId);
+      const client = await this.getClient();
+
+      const response = await client.api(`/teams/${teamId}/members`)
+        .filter(`microsoft.graph.aadUserConversationMember/userId eq '${azureUserId}'`)
+        .get();
+
+      if (!response.value || response.value.length === 0) {
+        console.log('[PLANNER] User not a member of team, nothing to remove');
+        return true;
+      }
+
+      const membershipId = response.value[0].id;
+      await client.api(`/teams/${teamId}/members/${membershipId}`).delete();
+
+      console.log('[PLANNER] Member removed successfully');
+      return true;
+    } catch (error: any) {
+      console.error('[PLANNER] Error removing team member:', error.message);
+      return false;
+    }
+  }
+
+  async getTeamMembers(teamId: string): Promise<AzureUser[]> {
+    const client = await this.getClient();
+    const response = await client.api(`/teams/${teamId}/members`)
+      .select('id,displayName,email,userId')
+      .top(999)
+      .get();
+    return (response.value || []).map((m: any) => ({
+      id: m.userId || m.id,
+      displayName: m.displayName,
+      mail: m.email,
+      userPrincipalName: m.email || ''
+    }));
+  }
+
   async getTeam(teamId: string): Promise<CreatedTeam | null> {
     try {
       const client = await this.getClient();
