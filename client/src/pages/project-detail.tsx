@@ -110,6 +110,7 @@ import {
 } from "lucide-react";
 import { TimeEntryManagementDialog } from "@/components/time-entry-management-dialog";
 import { PlannerStatusPanel } from "@/components/planner/PlannerStatusPanel";
+import { TeamMembersPanel } from "@/components/planner/TeamMembersPanel";
 import { SubSOWGenerator } from "@/components/sub-sow-generator";
 import { StatusReportDialog } from "@/components/status-report-dialog";
 import { format, startOfMonth, parseISO } from "date-fns";
@@ -305,6 +306,10 @@ export default function ProjectDetail() {
   const [importError, setImportError] = useState<string | null>(null);
   const [showAddMemberDialog, setShowAddMemberDialog] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [teamRemovalPrompt, setTeamRemovalPrompt] = useState<{
+    personId: string;
+    personName: string;
+  } | null>(null);
   
   // Edit project state
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -1291,18 +1296,42 @@ export default function ProjectDetail() {
     }
   });
 
+  const removeFromTeamMutation = useMutation({
+    mutationFn: async (personId: string) => {
+      return apiRequest(`/api/projects/${id}/team-members/${personId}/remove`, {
+        method: "DELETE"
+      });
+    },
+    onSuccess: () => {
+      setTeamRemovalPrompt(null);
+      queryClient.invalidateQueries({ queryKey: ['/api/projects', id, 'team-members'] });
+      toast({ title: "Member removed from Team" });
+    },
+    onError: () => {
+      setTeamRemovalPrompt(null);
+    }
+  });
+
   const deleteAssignmentMutation = useMutation({
     mutationFn: async (allocationId: string) => {
       return apiRequest(`/api/projects/${id}/allocations/${allocationId}`, {
         method: "DELETE"
       });
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/allocations`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects', id, 'team-members'] });
       toast({
         title: "Success",
         description: "Assignment deleted successfully"
       });
+      if (data?.teamRemovalSuggested && data?.personId) {
+        const person = allocations.find(a => a.personId === data.personId)?.person;
+        setTeamRemovalPrompt({
+          personId: data.personId,
+          personName: person?.name || person?.username || "this person",
+        });
+      }
     },
     onError: (error: any) => {
       toast({
@@ -2825,6 +2854,8 @@ export default function ProjectDetail() {
               clientTeamId={analytics?.project?.client?.microsoftTeamId}
               clientId={analytics?.project?.clientId}
             />
+            
+            <TeamMembersPanel projectId={id || ""} />
             
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
@@ -6319,6 +6350,33 @@ export default function ProjectDetail() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
+
+      <AlertDialog open={!!teamRemovalPrompt} onOpenChange={(open) => !open && setTeamRemovalPrompt(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from Microsoft Team?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{teamRemovalPrompt?.personName}</strong> no longer has any assignments on this project
+              and has no other active projects for this client.
+              Would you like to remove them from the Microsoft Team?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep in Team</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (teamRemovalPrompt) {
+                  removeFromTeamMutation.mutate(teamRemovalPrompt.personId);
+                }
+              }}
+              disabled={removeFromTeamMutation.isPending}
+            >
+              {removeFromTeamMutation.isPending ? "Removing..." : "Remove from Team"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {id && project && (
         <EmbedCodeDialog
