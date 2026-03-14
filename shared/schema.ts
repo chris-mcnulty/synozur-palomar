@@ -2525,6 +2525,9 @@ export const projectPlannerConnections = pgTable("project_planner_connections", 
   lastSyncAt: timestamp("last_sync_at"),
   lastSyncStatus: text("last_sync_status"), // success, error, partial
   lastSyncError: text("last_sync_error"),
+  lastInboundSyncAt: timestamp("last_inbound_sync_at"),
+  lastOutboundSyncAt: timestamp("last_outbound_sync_at"),
+  webhookActive: boolean("webhook_active").notNull().default(false),
   
   // Metadata
   connectedBy: varchar("connected_by").references(() => users.id),
@@ -2571,6 +2574,48 @@ export const insertPlannerTaskSyncSchema = createInsertSchema(plannerTaskSync).o
 });
 export type InsertPlannerTaskSync = z.infer<typeof insertPlannerTaskSyncSchema>;
 export type PlannerTaskSync = typeof plannerTaskSync.$inferSelect;
+
+// Planner webhook subscriptions - tracks Microsoft Graph webhook subscriptions for real-time sync
+export const plannerWebhookSubscriptions = pgTable("planner_webhook_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  connectionId: varchar("connection_id").notNull().references(() => projectPlannerConnections.id, { onDelete: 'cascade' }),
+  subscriptionId: varchar("subscription_id", { length: 255 }).notNull(),
+  resource: text("resource").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  clientState: varchar("client_state", { length: 255 }).notNull(),
+  status: text("status").notNull().default('active'),
+  lastNotificationAt: timestamp("last_notification_at"),
+  renewalFailures: integer("renewal_failures").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertPlannerWebhookSubscriptionSchema = createInsertSchema(plannerWebhookSubscriptions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertPlannerWebhookSubscription = z.infer<typeof insertPlannerWebhookSubscriptionSchema>;
+export type PlannerWebhookSubscription = typeof plannerWebhookSubscriptions.$inferSelect;
+
+// Planner sync log - detailed log of sync operations for audit and debugging
+export const plannerSyncLogs = pgTable("planner_sync_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  connectionId: varchar("connection_id").notNull().references(() => projectPlannerConnections.id, { onDelete: 'cascade' }),
+  direction: text("direction").notNull(), // inbound, outbound
+  action: text("action").notNull(), // status_update, date_update, reassignment, deletion, conflict
+  allocationId: varchar("allocation_id"),
+  taskId: varchar("task_id", { length: 255 }),
+  details: text("details"),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedBy: varchar("resolved_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertPlannerSyncLogSchema = createInsertSchema(plannerSyncLogs).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertPlannerSyncLog = z.infer<typeof insertPlannerSyncLogSchema>;
+export type PlannerSyncLog = typeof plannerSyncLogs.$inferSelect;
 
 // User-to-Azure AD mapping - maps Constellation users to Azure AD users for task assignment
 export const userAzureMappings = pgTable("user_azure_mappings", {

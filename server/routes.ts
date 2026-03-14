@@ -461,6 +461,62 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
   });
 
+  // Microsoft Graph webhook endpoint (unauthenticated - Graph sends validation and notifications)
+  app.post("/api/webhooks/planner", async (req, res) => {
+    if (req.query.validationToken) {
+      console.log('[PLANNER-WEBHOOK] Validation challenge received');
+      res.set('Content-Type', 'text/plain');
+      return res.status(200).send(req.query.validationToken as string);
+    }
+
+    try {
+      const notifications = req.body?.value;
+      if (!notifications || !Array.isArray(notifications)) {
+        return res.status(202).send();
+      }
+
+      console.log(`[PLANNER-WEBHOOK] Received ${notifications.length} notification(s)`);
+
+      res.status(202).send();
+
+      for (const notification of notifications) {
+        try {
+          if (!notification.subscriptionId) {
+            console.warn('[PLANNER-WEBHOOK] Notification missing subscriptionId, ignoring');
+            continue;
+          }
+
+          const sub = await storage.getPlannerWebhookSubscriptionBySubId(notification.subscriptionId);
+          if (!sub) {
+            console.warn('[PLANNER-WEBHOOK] Unknown subscription ID, ignoring notification');
+            continue;
+          }
+
+          if (sub.clientState !== notification.clientState) {
+            console.warn('[PLANNER-WEBHOOK] Client state mismatch, ignoring notification');
+            continue;
+          }
+
+          await storage.updatePlannerWebhookSubscription(sub.id, {
+            lastNotificationAt: new Date(),
+          });
+
+          const connection = await storage.getProjectPlannerConnectionById(sub.connectionId);
+          if (connection && connection.syncEnabled) {
+            const { syncFromPlanner } = await import('./services/planner-sync-scheduler.js');
+            console.log(`[PLANNER-WEBHOOK] Triggering inbound sync for project ${connection.projectId} via subscription ${sub.subscriptionId}`);
+            await syncFromPlanner(connection.projectId, connection);
+          }
+        } catch (notifErr: any) {
+          console.error('[PLANNER-WEBHOOK] Error processing notification:', notifErr.message);
+        }
+      }
+    } catch (error: any) {
+      console.error('[PLANNER-WEBHOOK] Error handling webhook:', error.message);
+      res.status(202).send();
+    }
+  });
+
   // Auth middleware is now imported from session-store module
 
   // Compliance tracking endpoint
@@ -3273,6 +3329,18 @@ export async function registerRoutes(app: Express): Promise<void> {
       if (req.body.personId) {
         await storage.ensureProjectEngagement(req.params.projectId, req.body.personId);
       }
+
+      try {
+        const syncRecord = await storage.getPlannerTaskSync(req.params.id);
+        if (syncRecord && syncRecord.syncStatus === 'synced') {
+          await storage.updatePlannerTaskSync(syncRecord.id, {
+            syncStatus: 'pending_outbound',
+            localVersion: syncRecord.localVersion + 1,
+          });
+        }
+      } catch (syncErr: any) {
+        console.warn('[PLANNER-SYNC] Failed to mark sync record as pending_outbound:', syncErr.message);
+      }
       
       res.json(updated);
     } catch (error: any) {
@@ -4321,6 +4389,13 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
         syncDirection: syncDirection || 'bidirectional',
         connectedBy: user.id
       });
+
+      try {
+        const { createWebhookForConnection } = await import('./services/planner-sync-scheduler.js');
+        await createWebhookForConnection(connection.id, planId);
+      } catch (webhookErr: any) {
+        console.warn('[PLANNER] Webhook creation failed, will use polling:', webhookErr.message);
+      }
       
       res.json(connection);
     } catch (error: any) {
@@ -4354,6 +4429,26 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
   // Disconnect project from Planner
   app.delete("/api/projects/:projectId/planner-connection", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
     try {
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      if (connection) {
+        try {
+          const subs = await storage.getAllActivePlannerWebhookSubscriptions();
+          const connSubs = subs.filter(s => s.connectionId === connection.id);
+          if (connSubs.length > 0) {
+            const { plannerService } = await import('./services/planner-service.js');
+            for (const sub of connSubs) {
+              try {
+                await plannerService.deleteWebhookSubscription(sub.subscriptionId);
+              } catch (delErr: any) {
+                console.warn(`[PLANNER] Failed to delete Graph webhook subscription ${sub.subscriptionId}:`, delErr.message);
+              }
+            }
+          }
+        } catch (webhookErr: any) {
+          console.warn('[PLANNER] Failed to clean up webhooks on disconnect:', webhookErr.message);
+        }
+      }
+
       await storage.deleteProjectPlannerConnection(req.params.projectId);
       res.status(204).send();
     } catch (error: any) {
@@ -5153,6 +5248,9 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
       }
       
       const syncs = await storage.getPlannerTaskSyncsByConnection(connection.id);
+      const unresolvedLogs = await storage.getUnresolvedPlannerSyncLogs(connection.id);
+      const recentLogs = await storage.getPlannerSyncLogs(connection.id, 20);
+      const conflictCount = syncs.filter(s => s.syncStatus === 'conflict').length;
       
       res.json({
         connected: true,
@@ -5165,21 +5263,142 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
           syncDirection: connection.syncDirection,
           autoAddMembers: connection.autoAddMembers,
           lastSyncAt: connection.lastSyncAt,
-          lastSyncStatus: connection.lastSyncStatus
+          lastSyncStatus: connection.lastSyncStatus,
+          lastInboundSyncAt: connection.lastInboundSyncAt,
+          lastOutboundSyncAt: connection.lastOutboundSyncAt,
+          webhookActive: connection.webhookActive
         },
         syncedTasks: syncs.length,
+        conflictCount,
         syncs: syncs.map(s => ({
+          id: s.id,
           allocationId: s.allocationId,
           taskId: s.taskId,
           taskTitle: s.taskTitle,
           bucketName: s.bucketName,
           syncStatus: s.syncStatus,
+          syncError: s.syncError,
           lastSyncedAt: s.lastSyncedAt
+        })),
+        unresolvedLogs: unresolvedLogs.map(l => ({
+          id: l.id,
+          direction: l.direction,
+          action: l.action,
+          allocationId: l.allocationId,
+          taskId: l.taskId,
+          details: l.details,
+          createdAt: l.createdAt
+        })),
+        recentLogs: recentLogs.map(l => ({
+          id: l.id,
+          direction: l.direction,
+          action: l.action,
+          details: l.details,
+          createdAt: l.createdAt,
+          resolvedAt: l.resolvedAt
         }))
       });
     } catch (error: any) {
       console.error("[PLANNER] Failed to get sync status:", error);
       res.status(500).json({ message: "Failed to get sync status" });
+    }
+  });
+
+  // Resolve planner sync conflict
+  app.post("/api/projects/:projectId/planner-sync/resolve-conflict", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const { syncId, resolution, logId } = req.body;
+      const user = req.user as any;
+
+      const validResolutions = ['keep_local', 'keep_remote', 'dismiss'];
+      if (!syncId || !resolution || !validResolutions.includes(resolution)) {
+        return res.status(400).json({ message: "syncId and a valid resolution (keep_local, keep_remote, dismiss) are required" });
+      }
+
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      if (!connection) {
+        return res.status(404).json({ message: "Planner connection not found" });
+      }
+
+      const syncs = await storage.getPlannerTaskSyncsByConnection(connection.id);
+      const syncRecord = syncs.find(s => s.id === syncId);
+      if (!syncRecord) {
+        return res.status(404).json({ message: "Sync record not found" });
+      }
+
+      if (resolution === 'keep_local') {
+        await storage.updatePlannerTaskSync(syncId, {
+          syncStatus: 'pending_outbound',
+          syncError: null,
+        });
+      } else if (resolution === 'keep_remote') {
+        await storage.updatePlannerTaskSync(syncId, {
+          syncStatus: 'pending_inbound',
+          syncError: null,
+        });
+      } else if (resolution === 'dismiss') {
+        const { plannerService } = await import('./services/planner-service.js');
+        let currentEtag = syncRecord.remoteEtag;
+        try {
+          const remoteTask = await plannerService.getTask(syncRecord.taskId);
+          if (remoteTask) {
+            currentEtag = remoteTask['@odata.etag'] || currentEtag;
+          }
+        } catch (etagErr: any) {
+          console.warn('[PLANNER] Could not fetch current etag for dismiss:', etagErr.message);
+        }
+        await storage.updatePlannerTaskSync(syncId, {
+          syncStatus: 'synced',
+          syncError: null,
+          remoteEtag: currentEtag,
+          localVersion: 1,
+        });
+      }
+
+      if (logId) {
+        await storage.updatePlannerSyncLog(logId, {
+          resolvedAt: new Date(),
+          resolvedBy: user.id,
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to resolve conflict:", error);
+      res.status(500).json({ message: "Failed to resolve conflict" });
+    }
+  });
+
+  // Dismiss planner sync log entry
+  app.post("/api/projects/:projectId/planner-sync/dismiss-log", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const { logId } = req.body;
+      const user = req.user as any;
+
+      if (!logId) {
+        return res.status(400).json({ message: "logId is required" });
+      }
+
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      if (!connection) {
+        return res.status(404).json({ message: "Planner connection not found" });
+      }
+
+      const logs = await storage.getPlannerSyncLogs(connection.id, 100);
+      const log = logs.find(l => l.id === logId);
+      if (!log) {
+        return res.status(404).json({ message: "Log entry not found for this project" });
+      }
+
+      await storage.updatePlannerSyncLog(logId, {
+        resolvedAt: new Date(),
+        resolvedBy: user.id,
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to dismiss log:", error);
+      res.status(500).json({ message: "Failed to dismiss log entry" });
     }
   });
 

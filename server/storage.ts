@@ -7,7 +7,7 @@ import {
   vocabularyCatalog, organizationVocabulary, tenants, tenantUsers,
   containerTypes, clientContainers, containerPermissions, containerColumns, metadataTemplates, documentMetadata,
   expenseReports, expenseReportItems, reimbursementBatches, reimbursementLineItems,
-  projectPlannerConnections, plannerTaskSync, userAzureMappings,
+  projectPlannerConnections, plannerTaskSync, userAzureMappings, plannerWebhookSubscriptions, plannerSyncLogs,
   type User, type InsertUser, type Client, type InsertClient, 
   type Project, type InsertProject, type Role, type InsertRole,
   type Estimate, type InsertEstimate, type EstimateLineItem, type InsertEstimateLineItem, type EstimateLineItemWithJoins,
@@ -50,6 +50,8 @@ import {
   type ReimbursementLineItem, type InsertReimbursementLineItem,
   type ProjectPlannerConnection, type InsertProjectPlannerConnection,
   type PlannerTaskSync, type InsertPlannerTaskSync,
+  type PlannerWebhookSubscription, type InsertPlannerWebhookSubscription,
+  type PlannerSyncLog, type InsertPlannerSyncLog,
   type UserAzureMapping, type InsertUserAzureMapping,
   type Tenant,
   type VocabularyTerms, DEFAULT_VOCABULARY,
@@ -999,6 +1001,8 @@ export interface IStorage {
   
   // Planner Integration Methods
   getProjectPlannerConnection(projectId: string): Promise<ProjectPlannerConnection | undefined>;
+  getProjectPlannerConnectionById(id: string): Promise<ProjectPlannerConnection | undefined>;
+  getProjectPlannerConnectionByPlanId(planId: string): Promise<ProjectPlannerConnection | undefined>;
   getAllPlannerConnectionsWithSyncEnabled(): Promise<ProjectPlannerConnection[]>;
   createProjectPlannerConnection(connection: InsertProjectPlannerConnection): Promise<ProjectPlannerConnection>;
   updateProjectPlannerConnection(id: string, updates: Partial<InsertProjectPlannerConnection>): Promise<ProjectPlannerConnection>;
@@ -1012,6 +1016,20 @@ export interface IStorage {
   deletePlannerTaskSync(id: string): Promise<void>;
   deletePlannerTaskSyncByAllocation(allocationId: string): Promise<void>;
   
+  // Planner Webhook Subscriptions
+  getPlannerWebhookSubscription(connectionId: string): Promise<PlannerWebhookSubscription | undefined>;
+  getPlannerWebhookSubscriptionBySubId(subscriptionId: string): Promise<PlannerWebhookSubscription | undefined>;
+  getAllActivePlannerWebhookSubscriptions(): Promise<PlannerWebhookSubscription[]>;
+  createPlannerWebhookSubscription(sub: InsertPlannerWebhookSubscription): Promise<PlannerWebhookSubscription>;
+  updatePlannerWebhookSubscription(id: string, updates: Partial<InsertPlannerWebhookSubscription>): Promise<PlannerWebhookSubscription>;
+  deletePlannerWebhookSubscription(id: string): Promise<void>;
+
+  // Planner Sync Logs
+  getPlannerSyncLogs(connectionId: string, limit?: number): Promise<PlannerSyncLog[]>;
+  getUnresolvedPlannerSyncLogs(connectionId: string): Promise<PlannerSyncLog[]>;
+  createPlannerSyncLog(log: InsertPlannerSyncLog): Promise<PlannerSyncLog>;
+  updatePlannerSyncLog(id: string, updates: Partial<InsertPlannerSyncLog>): Promise<PlannerSyncLog>;
+
   getUserAzureMapping(userId: string): Promise<UserAzureMapping | undefined>;
   getUserAzureMappingByAzureId(azureUserId: string): Promise<UserAzureMapping | undefined>;
   getUserAzureMappingByEmail(email: string): Promise<UserAzureMapping | undefined>;
@@ -11089,6 +11107,20 @@ export class DatabaseStorage implements IStorage {
     return connection || undefined;
   }
 
+  async getProjectPlannerConnectionById(id: string): Promise<ProjectPlannerConnection | undefined> {
+    const [connection] = await db.select()
+      .from(projectPlannerConnections)
+      .where(eq(projectPlannerConnections.id, id));
+    return connection || undefined;
+  }
+
+  async getProjectPlannerConnectionByPlanId(planId: string): Promise<ProjectPlannerConnection | undefined> {
+    const [connection] = await db.select()
+      .from(projectPlannerConnections)
+      .where(eq(projectPlannerConnections.planId, planId));
+    return connection || undefined;
+  }
+
   async getAllPlannerConnectionsWithSyncEnabled(): Promise<ProjectPlannerConnection[]> {
     return await db.select()
       .from(projectPlannerConnections)
@@ -11158,6 +11190,81 @@ export class DatabaseStorage implements IStorage {
   async deletePlannerTaskSyncByAllocation(allocationId: string): Promise<void> {
     await db.delete(plannerTaskSync)
       .where(eq(plannerTaskSync.allocationId, allocationId));
+  }
+
+  async getPlannerWebhookSubscription(connectionId: string): Promise<PlannerWebhookSubscription | undefined> {
+    const [sub] = await db.select()
+      .from(plannerWebhookSubscriptions)
+      .where(eq(plannerWebhookSubscriptions.connectionId, connectionId));
+    return sub || undefined;
+  }
+
+  async getPlannerWebhookSubscriptionBySubId(subscriptionId: string): Promise<PlannerWebhookSubscription | undefined> {
+    const [sub] = await db.select()
+      .from(plannerWebhookSubscriptions)
+      .where(eq(plannerWebhookSubscriptions.subscriptionId, subscriptionId));
+    return sub || undefined;
+  }
+
+  async getAllActivePlannerWebhookSubscriptions(): Promise<PlannerWebhookSubscription[]> {
+    return await db.select()
+      .from(plannerWebhookSubscriptions)
+      .where(eq(plannerWebhookSubscriptions.status, 'active'));
+  }
+
+  async createPlannerWebhookSubscription(sub: InsertPlannerWebhookSubscription): Promise<PlannerWebhookSubscription> {
+    const [created] = await db.insert(plannerWebhookSubscriptions)
+      .values(sub)
+      .returning();
+    return created;
+  }
+
+  async updatePlannerWebhookSubscription(id: string, updates: Partial<InsertPlannerWebhookSubscription>): Promise<PlannerWebhookSubscription> {
+    const [updated] = await db.update(plannerWebhookSubscriptions)
+      .set(updates)
+      .where(eq(plannerWebhookSubscriptions.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deletePlannerWebhookSubscription(id: string): Promise<void> {
+    await db.delete(plannerWebhookSubscriptions)
+      .where(eq(plannerWebhookSubscriptions.id, id));
+  }
+
+  async getPlannerSyncLogs(connectionId: string, limit: number = 50): Promise<PlannerSyncLog[]> {
+    return await db.select()
+      .from(plannerSyncLogs)
+      .where(eq(plannerSyncLogs.connectionId, connectionId))
+      .orderBy(desc(plannerSyncLogs.createdAt))
+      .limit(limit);
+  }
+
+  async getUnresolvedPlannerSyncLogs(connectionId: string): Promise<PlannerSyncLog[]> {
+    const reviewActions = ['reassignment', 'deletion', 'conflict'];
+    return await db.select()
+      .from(plannerSyncLogs)
+      .where(and(
+        eq(plannerSyncLogs.connectionId, connectionId),
+        isNull(plannerSyncLogs.resolvedAt),
+        inArray(plannerSyncLogs.action, reviewActions)
+      ))
+      .orderBy(desc(plannerSyncLogs.createdAt));
+  }
+
+  async createPlannerSyncLog(log: InsertPlannerSyncLog): Promise<PlannerSyncLog> {
+    const [created] = await db.insert(plannerSyncLogs)
+      .values(log)
+      .returning();
+    return created;
+  }
+
+  async updatePlannerSyncLog(id: string, updates: Partial<InsertPlannerSyncLog>): Promise<PlannerSyncLog> {
+    const [updated] = await db.update(plannerSyncLogs)
+      .set(updates)
+      .where(eq(plannerSyncLogs.id, id))
+      .returning();
+    return updated;
   }
 
   async getUserAzureMapping(userId: string): Promise<UserAzureMapping | undefined> {

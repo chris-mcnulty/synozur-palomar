@@ -50,7 +50,7 @@ Multi-tenant user model: A user in one tenant can be a client in another tenant,
 - **Invoice & Document Management**: Automated generation, PDF handling, milestone-based invoicing, and expense receipt inclusion.
 - **Expense Approval Workflow**: Comprehensive system with finite state machine and role-based access.
 - **Resource Management**: Dual List/Timeline views, capacity planning, and conflict detection.
-- **Microsoft Planner Integration**: Bidirectional sync of project assignments with Microsoft Planner tasks.
+- **Microsoft Planner Integration**: Full bidirectional sync of project assignments with Microsoft Planner tasks. Includes inbound sync (Planner → Constellation) for status updates, date changes, reassignment detection, and task deletion flagging. Real-time sync via Microsoft Graph webhook subscriptions with automatic renewal and polling fallback. Conflict detection and resolution UI for simultaneous changes. PM email notifications for reassignments and deletions. Sync activity log with audit trail.
 - **Embeddable Project Pages**: Project detail pages support `?embedded=true` query parameter to strip navigation chrome (header, sidebar, help chat). Embed code dialog on project detail generates iframe snippets with configurable tab, width, and height. Works with Teams tabs, SharePoint web parts, and any iframe host.
 - **Scheduled Jobs**: Background system for reminders and Planner sync.
 - **Financial Reporting**: Comprehensive reports on revenue, cost, profit, and margins.

@@ -977,6 +977,66 @@ class PlannerService {
     return `Week of ${startOfWeek.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
   }
 
+  // ============ WEBHOOK SUBSCRIPTION OPERATIONS ============
+
+  async createWebhookSubscription(
+    resource: string,
+    notificationUrl: string,
+    clientState: string,
+    expiresAt: Date
+  ): Promise<{ id: string; expirationDateTime: string }> {
+    try {
+      console.log('[PLANNER] Creating webhook subscription for resource:', resource);
+      const client = await this.getClient();
+
+      const subscription = await client.api('/subscriptions').post({
+        changeType: 'created,updated,deleted',
+        notificationUrl,
+        resource,
+        expirationDateTime: expiresAt.toISOString(),
+        clientState,
+      });
+
+      console.log('[PLANNER] Webhook subscription created:', subscription.id);
+      return {
+        id: subscription.id,
+        expirationDateTime: subscription.expirationDateTime,
+      };
+    } catch (error: any) {
+      console.error('[PLANNER] Error creating webhook subscription:', error.message);
+      throw new Error(`Failed to create webhook subscription: ${error.message}`);
+    }
+  }
+
+  async renewWebhookSubscription(subscriptionId: string, newExpiry: Date): Promise<void> {
+    try {
+      console.log('[PLANNER] Renewing webhook subscription:', subscriptionId);
+      const client = await this.getClient();
+
+      await client.api(`/subscriptions/${subscriptionId}`).patch({
+        expirationDateTime: newExpiry.toISOString(),
+      });
+
+      console.log('[PLANNER] Webhook subscription renewed');
+    } catch (error: any) {
+      console.error('[PLANNER] Error renewing webhook subscription:', error.message);
+      throw new Error(`Failed to renew webhook subscription: ${error.message}`);
+    }
+  }
+
+  async deleteWebhookSubscription(subscriptionId: string): Promise<void> {
+    try {
+      console.log('[PLANNER] Deleting webhook subscription:', subscriptionId);
+      const client = await this.getClient();
+      await client.api(`/subscriptions/${subscriptionId}`).delete();
+      console.log('[PLANNER] Webhook subscription deleted');
+    } catch (error: any) {
+      console.error('[PLANNER] Error deleting webhook subscription:', error.message);
+    }
+  }
+
+  // ============ CONNECTION TEST ============
+
   async testConnection(): Promise<{ success: boolean; message?: string; error?: string; permissionIssue?: string }> {
     try {
       console.log('[PLANNER] Testing connection...');
