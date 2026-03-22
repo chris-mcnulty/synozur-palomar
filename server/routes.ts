@@ -313,6 +313,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         'application/pdf', 
         'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         'text/plain', 'text/csv'
       ];
       
@@ -1061,10 +1062,172 @@ export async function registerRoutes(app: Express): Promise<void> {
         serverEnvironment: (process.env.REPLIT_DEPLOYMENT === '1' || process.env.NODE_ENV === 'production') ? 'production' : 'development',
         m365DefaultChannelFolders: (tenant as any).m365DefaultChannelFolders || null,
         m365SharePointConfig: (tenant as any).m365SharePointConfig || null,
+        pptxTitleTemplateFileId: (tenant as any).pptxTitleTemplateFileId || null,
+        pptxTitleTemplateFileName: (tenant as any).pptxTitleTemplateFileName || null,
+        pptxTitleTemplateUploadedAt: (tenant as any).pptxTitleTemplateUploadedAt || null,
+        pptxSectionTemplateFileId: (tenant as any).pptxSectionTemplateFileId || null,
+        pptxSectionTemplateFileName: (tenant as any).pptxSectionTemplateFileName || null,
+        pptxSectionTemplateUploadedAt: (tenant as any).pptxSectionTemplateUploadedAt || null,
+        pptxClosingTemplateFileId: (tenant as any).pptxClosingTemplateFileId || null,
+        pptxClosingTemplateFileName: (tenant as any).pptxClosingTemplateFileName || null,
+        pptxClosingTemplateUploadedAt: (tenant as any).pptxClosingTemplateUploadedAt || null,
       });
     } catch (error: any) {
       console.error("[TENANT_SETTINGS] Failed to fetch tenant settings:", error);
       res.status(500).json({ message: "Failed to fetch tenant settings" });
+    }
+  });
+
+  // PPTX Template routes (admin only)
+  const PPTX_TEMPLATE_TYPES = ['title', 'section', 'closing'] as const;
+  type PptxTemplateType = typeof PPTX_TEMPLATE_TYPES[number];
+
+  const pptxTemplateFileIdColumn: Record<PptxTemplateType, string> = {
+    title: 'pptxTitleTemplateFileId',
+    section: 'pptxSectionTemplateFileId',
+    closing: 'pptxClosingTemplateFileId',
+  };
+  const pptxTemplateFileNameColumn: Record<PptxTemplateType, string> = {
+    title: 'pptxTitleTemplateFileName',
+    section: 'pptxSectionTemplateFileName',
+    closing: 'pptxClosingTemplateFileName',
+  };
+  const pptxTemplateUploadedAtColumn: Record<PptxTemplateType, string> = {
+    title: 'pptxTitleTemplateUploadedAt',
+    section: 'pptxSectionTemplateUploadedAt',
+    closing: 'pptxClosingTemplateUploadedAt',
+  };
+
+  app.post("/api/tenant/pptx-templates/:type", requireAuth, requireRole(["admin"]), upload.single('file'), async (req, res) => {
+    try {
+      const type = req.params.type as PptxTemplateType;
+      if (!PPTX_TEMPLATE_TYPES.includes(type)) {
+        return res.status(400).json({ message: "Invalid template type. Must be: title, section, or closing" });
+      }
+      const user = req.user as any;
+      const tenantId = user?.tenantId || user?.primaryTenantId;
+      if (!tenantId) return res.status(404).json({ message: "No tenant associated with user" });
+
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+      const file = req.file;
+      const isPptx = file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+        file.originalname.toLowerCase().endsWith('.pptx');
+      if (!isPptx) {
+        return res.status(400).json({ message: "Only .pptx files are accepted" });
+      }
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+      // Delete existing template file if present
+      const existingFileId = (tenant as any)[pptxTemplateFileIdColumn[type]];
+      if (existingFileId) {
+        try {
+          await sharePointFileStorage.deleteFile(existingFileId, tenantId);
+        } catch (delErr: any) {
+          console.warn(`[PPTX_TEMPLATE] Could not delete existing file ${existingFileId}:`, delErr.message);
+        }
+      }
+
+      const metadata: DocumentMetadata = {
+        documentType: 'pptxTemplate',
+        clientId: tenant.id,
+        createdByUserId: user.id,
+        metadataVersion: 1,
+        tags: `templateType:${type}`,
+      };
+
+      const storedFile = await sharePointFileStorage.storeFile(
+        file.buffer,
+        file.originalname,
+        file.mimetype,
+        metadata,
+        user.id,
+        undefined,
+        tenantId
+      );
+
+      const updateData: Record<string, any> = {
+        [pptxTemplateFileIdColumn[type]]: storedFile.id,
+        [pptxTemplateFileNameColumn[type]]: file.originalname,
+        [pptxTemplateUploadedAtColumn[type]]: new Date(),
+      };
+      await storage.updateTenant(tenantId, updateData);
+
+      res.json({
+        fileId: storedFile.id,
+        fileName: file.originalname,
+        uploadedAt: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error("[PPTX_TEMPLATE] Upload error:", error);
+      res.status(500).json({ message: "Failed to upload PPTX template" });
+    }
+  });
+
+  app.get("/api/tenant/pptx-templates/:type/download", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const type = req.params.type as PptxTemplateType;
+      if (!PPTX_TEMPLATE_TYPES.includes(type)) {
+        return res.status(400).json({ message: "Invalid template type" });
+      }
+      const user = req.user as any;
+      const tenantId = user?.tenantId || user?.primaryTenantId;
+      if (!tenantId) return res.status(404).json({ message: "No tenant associated with user" });
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+      const fileId = (tenant as any)[pptxTemplateFileIdColumn[type]];
+      const fileName = (tenant as any)[pptxTemplateFileNameColumn[type]] || `${type}-template.pptx`;
+      if (!fileId) return res.status(404).json({ message: "No template uploaded for this slot" });
+
+      const fileContent = await sharePointFileStorage.getFileContent(fileId, tenantId);
+      if (!fileContent) return res.status(404).json({ message: "Template file not found in storage" });
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.send(fileContent.buffer);
+    } catch (error: any) {
+      console.error("[PPTX_TEMPLATE] Download error:", error);
+      res.status(500).json({ message: "Failed to download PPTX template" });
+    }
+  });
+
+  app.delete("/api/tenant/pptx-templates/:type", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const type = req.params.type as PptxTemplateType;
+      if (!PPTX_TEMPLATE_TYPES.includes(type)) {
+        return res.status(400).json({ message: "Invalid template type" });
+      }
+      const user = req.user as any;
+      const tenantId = user?.tenantId || user?.primaryTenantId;
+      if (!tenantId) return res.status(404).json({ message: "No tenant associated with user" });
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+      const fileId = (tenant as any)[pptxTemplateFileIdColumn[type]];
+      if (fileId) {
+        try {
+          await sharePointFileStorage.deleteFile(fileId, tenantId);
+        } catch (delErr: any) {
+          console.warn(`[PPTX_TEMPLATE] Could not delete file ${fileId}:`, delErr.message);
+        }
+      }
+
+      const updateData: Record<string, any> = {
+        [pptxTemplateFileIdColumn[type]]: null,
+        [pptxTemplateFileNameColumn[type]]: null,
+        [pptxTemplateUploadedAtColumn[type]]: null,
+      };
+      await storage.updateTenant(tenantId, updateData);
+
+      res.json({ message: "Template removed" });
+    } catch (error: any) {
+      console.error("[PPTX_TEMPLATE] Delete error:", error);
+      res.status(500).json({ message: "Failed to remove PPTX template" });
     }
   });
 
@@ -3939,6 +4102,207 @@ export async function registerRoutes(app: Express): Promise<void> {
     } catch (error: any) {
       console.error("[PLANNER] Failed to unlink team from client:", error);
       res.status(500).json({ message: "Failed to unlink team: " + error.message });
+    }
+  });
+
+  // Upload MSA document for a client
+  app.post("/api/clients/:id/upload-msa", requireAuth, requireRole(["admin", "billing-admin", "pm", "portfolio-manager", "executive"]), upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+      const client = await storage.getClient(req.params.id);
+      if (!client) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+      const tenantId = (req as any).user?.primaryTenantId || (req as any).user?.tenantId;
+      if (client.tenantId && tenantId && client.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (client.msaDocument) {
+        try {
+          await sharePointFileStorage.deleteFile(client.msaDocument, tenantId);
+        } catch (e) {
+          console.log(`[MSA UPLOAD] No previous MSA document to delete`);
+        }
+      }
+      const savedFile = await sharePointFileStorage.storeFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        {
+          documentType: 'msa',
+          clientId: client.id,
+          clientName: client.name,
+          createdByUserId: req.user!.id,
+          metadataVersion: 1,
+          tags: `msa,${client.name?.toLowerCase().replace(/\s+/g, '-')}`
+        },
+        req.user!.email,
+        `msa-${client.id}`,
+        tenantId
+      );
+      const updated = await storage.updateClient(client.id, {
+        msaDocument: savedFile.id,
+        hasMsa: true,
+      });
+      res.json({
+        message: "MSA document uploaded successfully",
+        client: updated,
+        file: { id: savedFile.id, name: savedFile.fileName, size: savedFile.size }
+      });
+    } catch (error: any) {
+      console.error("[MSA UPLOAD] Error:", error);
+      res.status(500).json({ message: error.message || "Failed to upload MSA document" });
+    }
+  });
+
+  // Download MSA document for a client
+  app.get("/api/clients/:id/download-msa", requireAuth, async (req, res) => {
+    try {
+      const client = await storage.getClient(req.params.id);
+      if (!client) return res.status(404).json({ message: "Client not found" });
+      const tenantId = (req as any).user?.primaryTenantId || (req as any).user?.tenantId;
+      if (client.tenantId && tenantId && client.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (!client.msaDocument) return res.status(404).json({ message: "No MSA document attached to this client" });
+      const fileData = await sharePointFileStorage.getFileContent(client.msaDocument, tenantId);
+      if (!fileData) return res.status(404).json({ message: "MSA document not found in storage" });
+      // Verify file belongs to this client (strict check when metadata is present, skipped for legacy files without ClientId)
+      const msaClientId = fileData.metadata.metadata.clientId;
+      if (msaClientId && msaClientId !== req.params.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.setHeader('Content-Type', fileData.metadata.contentType);
+      const msaFileName = fileData.metadata.originalName || fileData.metadata.fileName || `MSA_${client.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      res.setHeader('Content-Disposition', `attachment; filename="${msaFileName.replace(/"/g, '_')}"`);
+      res.send(fileData.buffer);
+    } catch (error: any) {
+      console.error("[MSA DOWNLOAD] Error:", error);
+      res.status(500).json({ message: "Failed to download MSA document" });
+    }
+  });
+
+  // Upload NDA document for a client
+  app.post("/api/clients/:id/upload-nda", requireAuth, requireRole(["admin", "billing-admin", "pm", "portfolio-manager", "executive"]), upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+      const client = await storage.getClient(req.params.id);
+      if (!client) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+      const tenantId = (req as any).user?.primaryTenantId || (req as any).user?.tenantId;
+      if (client.tenantId && tenantId && client.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (client.ndaDocument) {
+        try {
+          await sharePointFileStorage.deleteFile(client.ndaDocument, tenantId);
+        } catch (e) {
+          console.log(`[NDA UPLOAD] No previous NDA document to delete`);
+        }
+      }
+      const savedFile = await sharePointFileStorage.storeFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        {
+          documentType: 'nda',
+          clientId: client.id,
+          clientName: client.name,
+          createdByUserId: req.user!.id,
+          metadataVersion: 1,
+          tags: `nda,${client.name?.toLowerCase().replace(/\s+/g, '-')}`
+        },
+        req.user!.email,
+        `nda-${client.id}`,
+        tenantId
+      );
+      const updated = await storage.updateClient(client.id, {
+        ndaDocument: savedFile.id,
+        hasNda: true,
+      });
+      res.json({
+        message: "NDA document uploaded successfully",
+        client: updated,
+        file: { id: savedFile.id, name: savedFile.fileName, size: savedFile.size }
+      });
+    } catch (error: any) {
+      console.error("[NDA UPLOAD] Error:", error);
+      res.status(500).json({ message: error.message || "Failed to upload NDA document" });
+    }
+  });
+
+  // Download NDA document for a client
+  app.get("/api/clients/:id/download-nda", requireAuth, async (req, res) => {
+    try {
+      const client = await storage.getClient(req.params.id);
+      if (!client) return res.status(404).json({ message: "Client not found" });
+      const tenantId = (req as any).user?.primaryTenantId || (req as any).user?.tenantId;
+      if (client.tenantId && tenantId && client.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (!client.ndaDocument) return res.status(404).json({ message: "No NDA document attached to this client" });
+      const fileData = await sharePointFileStorage.getFileContent(client.ndaDocument, tenantId);
+      if (!fileData) return res.status(404).json({ message: "NDA document not found in storage" });
+      // Verify file belongs to this client (strict check when metadata is present, skipped for legacy files without ClientId)
+      const ndaClientId = fileData.metadata.metadata.clientId;
+      if (ndaClientId && ndaClientId !== req.params.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.setHeader('Content-Type', fileData.metadata.contentType);
+      const ndaFileName = fileData.metadata.originalName || fileData.metadata.fileName || `NDA_${client.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      res.setHeader('Content-Disposition', `attachment; filename="${ndaFileName.replace(/"/g, '_')}"`);
+      res.send(fileData.buffer);
+    } catch (error: any) {
+      console.error("[NDA DOWNLOAD] Error:", error);
+      res.status(500).json({ message: "Failed to download NDA document" });
+    }
+  });
+
+  // List all documents for a client from SPE
+  app.get("/api/clients/:id/documents", requireAuth, async (req, res) => {
+    try {
+      const client = await storage.getClient(req.params.id);
+      if (!client) return res.status(404).json({ message: "Client not found" });
+      const tenantId = (req as any).user?.primaryTenantId || (req as any).user?.tenantId;
+      if (client.tenantId && tenantId && client.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const files = await sharePointFileStorage.listFiles({ clientId: req.params.id }, tenantId);
+      res.json(files);
+    } catch (error: any) {
+      console.error("[CLIENT DOCUMENTS] Error:", error);
+      res.status(500).json({ message: "Failed to list client documents" });
+    }
+  });
+
+  // Download a specific document for a client by SPE file ID
+  app.get("/api/clients/:id/documents/:fileId/download", requireAuth, async (req, res) => {
+    try {
+      const client = await storage.getClient(req.params.id);
+      if (!client) return res.status(404).json({ message: "Client not found" });
+      const tenantId = (req as any).user?.primaryTenantId || (req as any).user?.tenantId;
+      if (client.tenantId && tenantId && client.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const fileData = await sharePointFileStorage.getFileContent(req.params.fileId, tenantId);
+      if (!fileData) return res.status(404).json({ message: "Document not found in storage" });
+      const storedFile = fileData.metadata;
+      // Require exact clientId match — deny if metadata is absent or mismatched
+      if (storedFile.metadata.clientId !== req.params.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.setHeader('Content-Type', storedFile.contentType);
+      const displayName = storedFile.originalName || storedFile.fileName || 'document';
+      res.setHeader('Content-Disposition', `attachment; filename="${displayName.replace(/"/g, '_')}"`);
+      res.send(fileData.buffer);
+    } catch (error: any) {
+      console.error("[CLIENT DOC DOWNLOAD] Error:", error);
+      res.status(500).json({ message: "Failed to download document" });
     }
   });
 
@@ -8734,8 +9098,40 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
         };
       }
 
+      // Download PPTX template files if configured, write to temp files for Python
+      const templateTempFiles: string[] = [];
+      if (tenant) {
+        const t = tenant as any;
+        const templateSlots: Array<{ fileId: string | null; key: string }> = [
+          { fileId: t.pptxTitleTemplateFileId, key: 'titleTemplatePath' },
+          { fileId: t.pptxSectionTemplateFileId, key: 'sectionTemplatePath' },
+          { fileId: t.pptxClosingTemplateFileId, key: 'closingTemplatePath' },
+        ];
+        for (const slot of templateSlots) {
+          if (slot.fileId) {
+            try {
+              const fileContent = await sharePointFileStorage.getFileContent(slot.fileId, tenantId);
+              if (fileContent?.buffer) {
+                const tmpTemplatePath = pathNode.join(osNode.tmpdir(), `pptx-template-${slot.key}-${Date.now()}.pptx`);
+                fsNode.writeFileSync(tmpTemplatePath, fileContent.buffer);
+                (pptxData as any)[slot.key] = tmpTemplatePath;
+                templateTempFiles.push(tmpTemplatePath);
+              }
+            } catch (tmplErr: any) {
+              console.warn(`[PPTX_TEMPLATE] Could not download template for ${slot.key}:`, tmplErr.message);
+            }
+          }
+        }
+      }
+
       const tmpFile = pathNode.join(osNode.tmpdir(), `status-report-${Date.now()}.pptx`);
       const scriptPath = pathNode.join(process.cwd(), 'server', 'scripts', 'generate_status_report_pptx.py');
+
+      const cleanupTemplateFiles = () => {
+        for (const f of templateTempFiles) {
+          try { fsNode.unlinkSync(f); } catch {}
+        }
+      };
 
       try {
         const { spawnSync } = await import('child_process');
@@ -8841,9 +9237,11 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
         fileStream.pipe(res);
         fileStream.on('end', () => {
           fsNode.unlink(tmpFile, () => {});
+          cleanupTemplateFiles();
         });
         fileStream.on('error', () => {
           fsNode.unlink(tmpFile, () => {});
+          cleanupTemplateFiles();
           if (!res.headersSent) {
             res.status(500).json({ message: "Failed to stream PPTX" });
           }
@@ -8851,6 +9249,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
       } catch (scriptError: any) {
         console.error("PPTX generation script error:", scriptError.message);
         if (fsNode.existsSync(tmpFile)) fsNode.unlinkSync(tmpFile);
+        cleanupTemplateFiles();
         res.status(500).json({ message: "Failed to generate PowerPoint report" });
       }
     } catch (error) {
