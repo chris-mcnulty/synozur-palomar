@@ -1,473 +1,27 @@
 import * as fsNode from "fs";
 import * as pathNode from "path";
 import * as osNode from "os";
-import { execSync } from "child_process";
-import type { Express, Request, Response, NextFunction } from "express";
-import { storage, db, generateSubSOWPdf } from "./storage";
-import { insertUserSchema, insertClientSchema, insertProjectSchema, insertRoleSchema, insertEstimateSchema, insertTimeEntrySchema, insertExpenseSchema, insertChangeOrderSchema, insertSowSchema, insertUserRateScheduleSchema, insertProjectRateOverrideSchema, insertSystemSettingSchema, insertInvoiceAdjustmentSchema, insertProjectMilestoneSchema, insertProjectAllocationSchema, updateInvoicePaymentSchema, vocabularyTermsSchema, updateOrganizationVocabularySchema, insertExpenseReportSchema, insertReimbursementBatchSchema, sows, timeEntries, expenses, users, projects, clients, projectMilestones, invoiceBatches, invoiceLines, projectAllocations, projectWorkstreams, projectEpics, projectStages, roles, estimateLineItems, estimateEpics, estimateStages, estimateActivities, expenseReports, reimbursementBatches, pendingReceipts, estimates, tenants, airportCodes, expenseAttachments, insertRaiddEntrySchema, raiddEntries, insertGroundingDocumentSchema, groundingDocCategoryEnum, GROUNDING_DOC_CATEGORY_LABELS, insertSupportTicketSchema, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES, supportTickets, supportTicketReplies, tenantUsers, projectChannels, projectBaselines, servicePlans, blockedDomains, pageViews } from "@shared/schema";
-import { isPublicEmailDomain } from "@shared/publicDomains";
-import { eq, sql, inArray, max, and, gte, lte, isNull, desc, or } from "drizzle-orm";
+import type { Express, Request, Response } from "express";
 import { z } from "zod";
-import { fileTypeFromBuffer } from "file-type";
-import rateLimit from "express-rate-limit";
+import { storage, db, generateSubSOWPdf } from "../storage";
+import { insertProjectSchema, insertChangeOrderSchema, insertSowSchema, insertProjectAllocationSchema, insertRaiddEntrySchema, sows, timeEntries, expenses, users, projects, clients, projectMilestones, invoiceBatches, invoiceLines, projectAllocations, projectWorkstreams, projectEpics, projectStages, roles, estimates, estimateLineItems, changeOrders, raiddEntries, projectChannels, tenants, tenantUsers } from "@shared/schema";
+import { eq, sql, inArray, max, and, gte, lte, desc, or } from "drizzle-orm";
+import { emailService } from "../services/email-notification.js";
+import { SharePointFileStorage } from "../services/sharepoint-file-storage.js";
+import { generateRetainerPaymentMilestones } from "./estimates.js";
+import { createHubSpotDealNote, createHubSpotCompanyNote, getLinkedHubSpotCompanyId, isHubSpotConnected } from "../services/hubspot-client.js";
 import multer from "multer";
-import { receiptStorage } from "./services/receipt-storage.js";
-import { LocalFileStorage } from "./services/local-file-storage.js";
-import { SharePointFileStorage } from "./services/sharepoint-file-storage.js";
-import { emailService } from "./services/email-notification.js";
-import { sharepointStorage, initSharePointStorage } from "./services/sharepoint-storage.js";
-import { registerPlatformRoutes, enforcePlanStatus } from "./routes/platform.js";
-import { registerSharePointContainerRoutes } from "./routes/sharepoint-containers.js";
-import { registerExpenseRoutes } from "./routes/expenses.js";
-import { registerEstimateRoutes, generateRetainerPaymentMilestones } from "./routes/estimates.js";
-import { registerInvoiceRoutes } from "./routes/invoices.js";
-import { registerHubSpotRoutes } from "./routes/hubspot.js";
-import { registerTenantStorageRoutes } from "./routes/tenant-storage.js";
-import { registerMcpRoutes } from "./routes/mcp.js";
-import { registerTeamsAppRoutes } from "./routes/teams-app.js";
-import { createHubSpotDealNote, createHubSpotCompanyNote, getLinkedHubSpotCompanyId, isHubSpotConnected } from "./services/hubspot-client.js";
-import { invalidateProviderCache, ReplitAIProvider, AzureFoundryProvider } from "./services/ai-provider.js";
-import { AI_PROVIDERS, AI_FEATURES, AI_MODELS, AI_MODEL_INFO, insertAiConfigurationSchema } from "@shared/schema";
-import { registerUserRoutes } from "./routes/users.js";
-import { registerTenantRoutes } from "./routes/tenant.js";
-import { registerReportsRoutes } from "./routes/reports.js";
-import { registerPlannerRoutes } from "./routes/planner.js";
-import { registerTeamsAutomationRoutes } from "./routes/teams-automation.js";
-import { registerClientRoutes } from "./routes/clients.js";
-import { registerTimeEntryRoutes } from "./routes/time-entries.js";
-import { registerAiRoutes } from "./routes/ai.js";
-import { registerRaiddRoutes } from "./routes/raidd.js";
-import { registerSupportRoutes } from "./routes/support.js";
 
-// Initialize SharePoint storage with database access
-initSharePointStorage(storage);
-
-function resolveChangelogPath(): string {
-  try {
-    const candidates = [
-      pathNode.join(process.cwd(), "client", "public", "docs", "CHANGELOG.md"),
-      pathNode.join(process.cwd(), "dist", "public", "docs", "CHANGELOG.md"),
-      pathNode.join(process.cwd(), "docs", "CHANGELOG.md"),
-    ];
-    for (const p of candidates) {
-      if (fsNode.existsSync(p)) return p;
-    }
-    return candidates[0];
-  } catch {
-    return "client/public/docs/CHANGELOG.md";
-  }
+interface ProjectRouteDeps {
+  requireAuth: any;
+  requireRole: (roles: string[]) => any;
+  upload: any;
+  sharePointFileStorage: SharePointFileStorage;
 }
 
-function readChangelogContent(): string {
-  try {
-    const changelogPath = resolveChangelogPath();
-    return fsNode.readFileSync(changelogPath, "utf-8");
-  } catch {
-    return "";
-  }
-}
+export function registerProjectRoutes(app: Express, deps: ProjectRouteDeps) {
+  const { requireAuth, requireRole, upload, sharePointFileStorage } = deps;
 
-// SharePoint functionality restored - using real GraphClient implementation
-
-// SharePoint/Container validation schemas moved to server/routes/sharepoint-containers.ts
-
-// Azure/SharePoint imports
-import { msalInstance, authCodeRequest, tokenRequest } from "./auth/entra-config";
-import { graphClient } from "./services/graph-client.js";
-import type { InsertPendingReceipt } from "@shared/schema";
-import { toPendingReceiptInsert, toDateString, toDecimalString, toExpenseInsert } from "./utils/storageMappers.js";
-import { localFileStorage, type DocumentMetadata } from "./services/local-file-storage.js";
-import { invoicePDFStorage } from "./services/invoice-pdf-storage.js";
-
-// User type is now defined in session-store.ts with SSO properties
-
-
-// Import auth module and shared session store
-import { registerAuthRoutes } from "./auth-routes";
-import { requireAuth, requireRole, requirePlatformAdmin, getAllSessions } from "./session-store";
-import { checkAndRefreshToken, handleTokenRefresh, startTokenRefreshScheduler } from "./auth/sso-token-refresh";
-
-export async function registerRoutes(app: Express): Promise<void> {
-  // Seed changelog version from CHANGELOG.md (non-blocking, non-critical)
-  (async () => {
-    try {
-      const existing = await storage.getSystemSettingValue("CURRENT_CHANGELOG_VERSION", "");
-      const content = readChangelogContent();
-      if (!content) return;
-      const match = content.match(/###\s+Version\s+([\d.]+)/);
-      const fileVersion = match ? match[1] : "";
-      if (fileVersion && fileVersion !== existing) {
-        await storage.setSystemSetting(
-          "CURRENT_CHANGELOG_VERSION",
-          fileVersion,
-          `Auto-detected from CHANGELOG.md at startup`,
-          "string"
-        );
-        console.log(`[CHANGELOG] Seeded CURRENT_CHANGELOG_VERSION: ${fileVersion}`);
-      }
-    } catch (err: any) {
-      console.error("[CHANGELOG] Failed to seed changelog version:", err.message);
-    }
-  })();
-
-  // Register authentication routes first
-  registerAuthRoutes(app);
-  
-  // Register platform admin routes
-  registerPlatformRoutes(app, requireAuth);
-
-  // Apply plan enforcement middleware globally for all subsequent API routes
-  app.use("/api", enforcePlanStatus);
-  
-  // Start SSO token refresh scheduler
-  startTokenRefreshScheduler();
-  
-  // Sessions are now managed in the shared session-store module
-
-  // Check if Entra ID is configured  
-  const isEntraConfigured = !!msalInstance;
-
-  // SharePoint configuration
-  const getSharePointConfig = async () => {
-    try {
-      const { getSharePointContainerConfig } = await import('./auth/entra-config.js');
-      const containerConfig = getSharePointContainerConfig();
-
-      let containerId = '';
-
-      const isProduction = process.env.REPLIT_DEPLOYMENT === '1' || process.env.NODE_ENV === 'production';
-      try {
-        const { tenants } = await import('@shared/schema.js');
-        const { eq } = await import('drizzle-orm');
-        const { db } = await import('./db.js');
-        const speEnabledTenants = await db.select({
-          speContainerIdDev: tenants.speContainerIdDev,
-          speContainerIdProd: tenants.speContainerIdProd,
-          speStorageEnabled: tenants.speStorageEnabled,
-        }).from(tenants).where(eq(tenants.speStorageEnabled, true));
-
-        if (speEnabledTenants.length >= 1) {
-          const t = speEnabledTenants[0];
-          const tenantContainer = isProduction ? t.speContainerIdProd : t.speContainerIdDev;
-          if (tenantContainer) {
-            containerId = tenantContainer;
-          }
-        }
-      } catch (dbErr) {
-        console.warn('[getSharePointConfig] Failed to look up tenant SPE config:', dbErr instanceof Error ? dbErr.message : dbErr);
-      }
-
-      if (!containerId) {
-        containerId = await storage.getSystemSettingValue('SHAREPOINT_CONTAINER_ID') || containerConfig.containerId || '';
-      }
-
-      if (!containerId) {
-        containerId = await storage.getSystemSettingValue('SHAREPOINT_DRIVE_ID') || process.env.SHAREPOINT_DRIVE_ID || '';
-      }
-
-      const legacySiteId = await storage.getSystemSettingValue('SHAREPOINT_SITE_ID') || process.env.SHAREPOINT_SITE_ID;
-
-      return {
-        containerId,
-        containerTypeId: containerConfig.containerTypeId,
-        environment: containerConfig.environment,
-        containerName: containerConfig.containerName,
-        siteId: legacySiteId || 'legacy-not-used',
-        driveId: containerId,
-        configured: !!containerId
-      };
-    } catch (error) {
-      let containerId = process.env.SHAREPOINT_CONTAINER_ID;
-
-      if (!containerId) {
-        containerId = process.env.SHAREPOINT_DRIVE_ID;
-      }
-
-      return {
-        containerId,
-        siteId: process.env.SHAREPOINT_SITE_ID || 'legacy-not-used',
-        driveId: containerId,
-        configured: !!containerId
-      };
-    }
-  };
-
-  // Register SharePoint + Container routes (extracted module)
-  registerSharePointContainerRoutes(app, {
-    requireAuth,
-    requireRole,
-    isEntraConfigured,
-    getSharePointConfig,
-  });
-
-  // File storage instances used by remaining routes (SOW uploads)
-  const sharePointFileStorage = new SharePointFileStorage();
-  const localFileStorageInstance = new LocalFileStorage();
-  const isProductionEnv = process.env.REPLIT_DEPLOYMENT === '1' || process.env.NODE_ENV === 'production';
-  const smartFileStorage = {
-    async isSpeEnabledForTenant(tenantId?: string): Promise<boolean> {
-      if (!tenantId) return false;
-      try {
-        const speConfig = await storage.getTenantSpeConfig(tenantId);
-        return speConfig?.speStorageEnabled === true;
-      } catch { return false; }
-    },
-    async storeFile(
-      buffer: Buffer, originalName: string, contentType: string,
-      metadata: DocumentMetadata, uploadedBy: string, fileId?: string, tenantId?: string
-    ) {
-      const documentType = metadata.documentType;
-      const speEnabled = await this.isSpeEnabledForTenant(tenantId);
-
-      if (documentType === 'receipt' && !speEnabled) {
-        const storedReceipt = await receiptStorage.storeReceipt(buffer, originalName, contentType, {
-          documentType: 'receipt', projectId: metadata.projectId, effectiveDate: metadata.effectiveDate,
-          amount: metadata.amount, tags: metadata.tags, createdByUserId: metadata.createdByUserId,
-          metadataVersion: metadata.metadataVersion || 1
-        });
-        return {
-          id: storedReceipt.fileId, fileName: storedReceipt.fileName, originalName: storedReceipt.originalName,
-          size: storedReceipt.size, contentType: storedReceipt.contentType, filePath: storedReceipt.fileId,
-          metadata: { ...storedReceipt.metadata, driveId: 'receipt-storage',
-            tags: storedReceipt.metadata.tags ? `${storedReceipt.metadata.tags},RECEIPT_STORAGE` : 'RECEIPT_STORAGE' },
-          uploadedAt: new Date(), uploadedBy: uploadedBy
-        };
-      }
-      const businessDocTypes = ['invoice', 'contract', 'receipt'];
-      const useLocalStorage = !isProductionEnv && !speEnabled && businessDocTypes.includes(documentType);
-      if (useLocalStorage) {
-        const result = await localFileStorageInstance.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId);
-        return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},LOCAL_STORAGE` : 'LOCAL_STORAGE' } };
-      }
-      const result = await sharePointFileStorage.storeFile(buffer, originalName, contentType, metadata, uploadedBy, fileId, tenantId);
-      return { ...result, metadata: { ...result.metadata, tags: result.metadata.tags ? `${result.metadata.tags},SHAREPOINT_STORAGE` : 'SHAREPOINT_STORAGE' } };
-    },
-    async getFileContent(fileId: string, tenantId?: string) {
-      try { const buffer = await receiptStorage.getReceipt(fileId); return { buffer, metadata: {} }; }
-      catch { try { return await localFileStorageInstance.getFileContent(fileId); }
-      catch { return await sharePointFileStorage.getFileContent(fileId, tenantId); } }
-    },
-    async downloadFileDirect(fileId: string, tenantId?: string): Promise<{ buffer: Buffer; fileName: string; mimeType: string } | null> {
-      try {
-        const buffer = await receiptStorage.getReceipt(fileId);
-        return { buffer, fileName: fileId, mimeType: 'application/octet-stream' };
-      } catch { /* not in receipt storage */ }
-      try {
-        const local = await localFileStorageInstance.getFileContent(fileId);
-        if (local?.buffer) {
-          const meta = local.metadata || {} as any;
-          return { buffer: local.buffer, fileName: meta.originalName || meta.fileName || fileId, mimeType: meta.contentType || 'application/octet-stream' };
-        }
-      } catch { /* not in local storage */ }
-      try {
-        const { containerId, azureTenantId } = await sharePointFileStorage.getContainerForTenant(tenantId);
-        if (!containerId) return null;
-        const client = sharePointFileStorage.resolveGraphClient(azureTenantId);
-        const result = await client.downloadFile(containerId, fileId);
-        return { buffer: result.buffer, fileName: result.fileName, mimeType: result.mimeType };
-      } catch (error) {
-        console.error(`[SMART_STORAGE] downloadFileDirect failed for ${fileId}:`, error instanceof Error ? error.message : error);
-        return null;
-      }
-    },
-  };
-
-  // Register expense routes (extracted module)
-  registerExpenseRoutes(app, {
-    requireAuth,
-    requireRole,
-    smartFileStorage,
-  });
-
-  // Register estimate routes (extracted module)
-  registerEstimateRoutes(app, {
-    requireAuth,
-    requireRole,
-  });
-
-  registerInvoiceRoutes(app, {
-    requireAuth,
-    requireRole,
-    downloadFileDirect: smartFileStorage.downloadFileDirect.bind(smartFileStorage),
-  });
-
-  // Register HubSpot CRM routes (extracted module)
-  registerHubSpotRoutes(app, {
-    requireAuth,
-    requireRole,
-  });
-
-  // Register tenant SPE storage routes
-  registerTenantStorageRoutes(app, {
-    requireAuth,
-    requireRole,
-  });
-
-  registerMcpRoutes(app, {
-    requireAuth,
-    requireRole,
-  });
-
-  registerTeamsAppRoutes(app, {
-    requireAuth,
-    requireRole,
-  });
-
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { 
-      fileSize: 50 * 1024 * 1024
-    },
-    fileFilter: (req: any, file: any, cb: any) => {
-      const allowedMimeTypes = [
-        'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
-        'application/pdf', 
-        'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        'text/plain', 'text/csv'
-      ];
-      
-      if (allowedMimeTypes.includes(file.mimetype)) {
-        cb(null, true);
-      } else {
-        cb(new Error(`File type ${file.mimetype} not allowed`));
-      }
-    }
-  });
-
-  // Serve files from object storage (public directory)
-  app.get("/object-storage/*", async (req, res) => {
-    try {
-      const objectPath = (req.params as any)[0] as string;
-      
-      // Security: only allow access to public directory
-      if (!objectPath.startsWith('public/')) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-      
-      const publicObjectDir = process.env.PUBLIC_OBJECT_SEARCH_PATHS;
-      if (!publicObjectDir) {
-        return res.status(500).json({ message: "Object storage not configured" });
-      }
-      
-      const firstPath = publicObjectDir.split(',')[0].trim();
-      const pathParts = firstPath.split('/').filter((p: string) => p);
-      const bucketName = pathParts[0];
-      
-      const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
-      
-      // Initialize GCS client with Replit sidecar credentials
-      const { Storage } = await import('@google-cloud/storage');
-      const objectStorageClient = new Storage({
-        credentials: {
-          audience: "replit",
-          subject_token_type: "access_token",
-          token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-          type: "external_account",
-          credential_source: {
-            url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-            format: {
-              type: "json",
-              subject_token_field_name: "access_token",
-            },
-          },
-          universe_domain: "googleapis.com",
-        },
-        projectId: "",
-      });
-      
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectPath);
-      
-      const [exists] = await file.exists();
-      if (!exists) {
-        return res.status(404).json({ message: "File not found" });
-      }
-      
-      const [metadata] = await file.getMetadata();
-      res.setHeader('Content-Type', metadata.contentType || 'application/octet-stream');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      
-      file.createReadStream().pipe(res);
-    } catch (error: any) {
-      console.error("[OBJECT_STORAGE] Failed to serve file:", error);
-      res.status(500).json({ message: "Failed to retrieve file" });
-    }
-  });
-
-  // Environment info endpoint
-  app.get("/api/environment", async (req, res) => {
-    try {
-      const isProduction = process.env.NODE_ENV === 'production' || process.env.REPLIT_DEPLOYMENT === '1';
-      const environment = isProduction ? 'Production' : 'Development';
-
-      res.json({
-        environment,
-        isProduction,
-        nodeEnv: process.env.NODE_ENV,
-        replitDeployment: process.env.REPLIT_DEPLOYMENT
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to get environment info" });
-    }
-  });
-
-
-  // Health check endpoint
-  app.get("/api/health", async (req, res) => {
-    try {
-      // Test database connection
-      const dbTest = await storage.getUsers();
-
-      const healthStatus = { 
-        status: "healthy",
-        database: "connected",
-        userCount: dbTest.length,
-        entraConfigured: !!isEntraConfigured,
-        sharepoint: {
-          configured: false,
-          accessible: false,
-          error: undefined as string | undefined
-        },
-        environment: process.env.NODE_ENV || "development"
-      };
-
-      // Test SharePoint connectivity if configured
-      if (isEntraConfigured) {
-        const sharePointConfig = await getSharePointConfig();
-        healthStatus.sharepoint.configured = sharePointConfig.configured ? true : false;
-
-        if (sharePointConfig.configured) {
-          try {
-            const connectivity = await graphClient.testConnectivity(
-              sharePointConfig.siteId,
-              sharePointConfig.containerId
-            );
-
-            healthStatus.sharepoint.accessible = Boolean(connectivity.authenticated && 
-                                               connectivity.containerAccessible);
-
-            if (connectivity.error) {
-              healthStatus.sharepoint.error = connectivity.error;
-            }
-          } catch (error) {
-            healthStatus.sharepoint.error = 'SharePoint connectivity test failed: ' + (error instanceof Error ? error.message : 'Unknown error');
-          }
-        }
-      }
-
-      res.json(healthStatus);
-    } catch (error: any) {
-      console.error("[HEALTH] Database connection error:", error);
-      res.status(503).json({ 
-        status: "unhealthy",
-        database: "error",
-        error: error.message || "Database connection failed",
-        environment: process.env.NODE_ENV || "development"
-      });
-    }
-  });
 
   // Auth middleware is now imported from session-store module
 
@@ -480,452 +34,6 @@ export async function registerRoutes(app: Express): Promise<void> {
     } catch (error) {
       console.error("Error fetching compliance data:", error);
       res.status(500).json({ message: "Failed to fetch compliance data" });
-    }
-  });
-
-
-    // ── Extracted domain-focused route modules ────────────────────────────
-    registerUserRoutes(app, { requireAuth, requireRole });
-    registerTenantRoutes(app, { requireAuth, requireRole, requirePlatformAdmin, sharePointFileStorage });
-    registerReportsRoutes(app, { requireAuth, requireRole, sharePointFileStorage });
-    registerPlannerRoutes(app, { requireAuth, requireRole });
-    registerTeamsAutomationRoutes(app, { requireAuth, requireRole });
-    registerClientRoutes(app, { requireAuth, requireRole, sharePointFileStorage });
-    registerTimeEntryRoutes(app, { requireAuth, requireRole });
-    registerAiRoutes(app, { requireAuth, requireRole, requirePlatformAdmin });
-    registerRaiddRoutes(app, { requireAuth, requireRole });
-    registerSupportRoutes(app, { requireAuth, requireRole });
-  
-
-  // System Settings (read: admin, write: platform admin only)
-  app.get("/api/settings", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const settings = await storage.getSystemSettings();
-      res.json(settings);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch system settings" });
-    }
-  });
-
-  app.get("/api/settings/:key", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const setting = await storage.getSystemSetting(req.params.key);
-      if (!setting) {
-        return res.status(404).json({ message: "System setting not found" });
-      }
-      res.json(setting);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch system setting" });
-    }
-  });
-
-  app.post("/api/settings", requireAuth, requirePlatformAdmin, async (req, res) => {
-    try {
-      const validatedData = insertSystemSettingSchema.parse(req.body);
-      const setting = await storage.setSystemSetting(
-        validatedData.settingKey,
-        validatedData.settingValue,
-        validatedData.description || undefined,
-        validatedData.settingType || 'string'
-      );
-      res.status(201).json(setting);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid setting data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to create/update system setting" });
-    }
-  });
-
-  app.put("/api/settings/:id", requireAuth, requirePlatformAdmin, async (req, res) => {
-    try {
-      const validatedData = insertSystemSettingSchema.parse(req.body);
-      const setting = await storage.updateSystemSetting(req.params.id, validatedData);
-      res.json(setting);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid setting data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to update system setting" });
-    }
-  });
-
-  app.delete("/api/settings/:id", requireAuth, requirePlatformAdmin, async (req, res) => {
-    try {
-      await storage.deleteSystemSetting(req.params.id);
-      res.status(204).send();
-    } catch (error) {
-      console.error("Error deleting system setting:", error);
-      res.status(400).json({ 
-        message: error instanceof Error ? error.message : "Failed to delete system setting" 
-      });
-    }
-  });
-
-  // ============================================================================
-  // "What's New" Changelog Modal API
-  // ============================================================================
-
-  function extractFallbackHighlights(markdown: string): Array<{ icon: string; title: string; description: string }> {
-    const highlights: Array<{ icon: string; title: string; description: string }> = [];
-    const featurePattern = /\*\*([^*]+)\*\*\n((?:- [^\n]+\n?)+)/g;
-    let match;
-    const icons = ["🚀", "💬", "📊", "📋", "🔧", "📚", "⚡", "🎯"];
-    let iconIdx = 0;
-    while ((match = featurePattern.exec(markdown)) !== null && highlights.length < 5) {
-      const title = match[1].trim();
-      if (title === "Release Date:" || title === "Status:" || title === "Codename:") continue;
-      const bullets = match[2].split("\n").filter(l => l.trim().startsWith("- ")).map(l => l.replace(/^- /, "").trim());
-      const description = bullets.slice(0, 2).join(". ");
-      if (description) {
-        highlights.push({ icon: icons[iconIdx % icons.length], title, description });
-        iconIdx++;
-      }
-    }
-    return highlights;
-  }
-
-  app.get("/api/changelog/whats-new", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as any;
-      const tenantId = user?.primaryTenantId;
-
-      const currentVersion = await storage.getSystemSettingValue("CURRENT_CHANGELOG_VERSION", "");
-      if (!currentVersion) {
-        return res.json({ showModal: false });
-      }
-
-      if (tenantId) {
-        const tenant = await storage.getTenant(tenantId);
-        if (tenant && tenant.showChangelogOnLogin === false) {
-          return res.json({ showModal: false });
-        }
-      }
-
-      const userRecord = await storage.getUser(user.id);
-      if (userRecord?.lastDismissedChangelogVersion === currentVersion) {
-        return res.json({ showModal: false });
-      }
-
-      const cacheKey = `CHANGELOG_SUMMARY_${currentVersion}`;
-      let cachedSummary = await storage.getSystemSettingValue(cacheKey, "");
-
-      if (cachedSummary) {
-        try {
-          const parsed = JSON.parse(cachedSummary);
-          return res.json({ showModal: true, version: currentVersion, ...parsed });
-        } catch {
-          return res.json({ showModal: true, version: currentVersion, summary: cachedSummary, highlights: [] });
-        }
-      }
-
-      const changelogContent = readChangelogContent();
-
-      if (!changelogContent) {
-        return res.json({ showModal: true, version: currentVersion, summary: "New updates are available!", highlights: [] });
-      }
-
-      const twoWeeksAgo = new Date();
-      twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-
-      const versionBlocks = changelogContent.split(/(?=###\s+Version\s+)/);
-      const recentSections: string[] = [];
-      for (const block of versionBlocks) {
-        const dateMatch = block.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/);
-        if (dateMatch) {
-          const blockDate = new Date(`${dateMatch[1]} ${dateMatch[2]}, ${dateMatch[3]}`);
-          if (blockDate >= twoWeeksAgo) {
-            recentSections.push(block.trim());
-          }
-        }
-      }
-
-      const relevantSection = recentSections.length > 0
-        ? recentSections.join("\n\n").substring(0, 4000)
-        : changelogContent.substring(0, 2000);
-
-      try {
-        const { aiService, buildGroundingContext } = await import("./services/ai-service.js");
-        if (aiService.isConfigured()) {
-          const clTenantId = (req.user as any)?.tenantId;
-          const clGroundingDocs = clTenantId
-            ? await storage.getActiveGroundingDocumentsForTenant(clTenantId)
-            : await storage.getActiveGroundingDocuments();
-          const clGroundingCtx = buildGroundingContext(clGroundingDocs, 'changelog');
-
-          const result = await aiService.customPrompt(
-            "You summarize software release notes into friendly, non-technical overviews for business users. Return valid JSON only.",
-            `Summarize these release notes from the last two weeks into a friendly, non-technical overview. Combine all versions into a single cohesive summary. Group into 3-5 highlights with emoji icons. Format as JSON: { "summary": "brief overview sentence", "highlights": [{ "icon": "emoji", "title": "short title", "description": "1-2 sentence description" }] }\n\nRelease notes:\n${relevantSection}`,
-            { temperature: 0.5, maxTokens: 1024, responseFormat: "json", groundingContext: clGroundingCtx, usageCtx: { tenantId: clTenantId, userId: (req.user as any)?.id, feature: 'other' as any } }
-          );
-
-          if (result.content && result.content.trim()) {
-            try {
-              const parsed = JSON.parse(result.content);
-              if (parsed.highlights && parsed.highlights.length > 0) {
-                await storage.setSystemSetting(cacheKey, result.content, `Cached AI summary for changelog version ${currentVersion}`, "json");
-                return res.json({ showModal: true, version: currentVersion, ...parsed });
-              }
-            } catch {
-              console.log("[CHANGELOG] AI returned non-JSON, falling through to structured fallback");
-            }
-          }
-        }
-      } catch (aiError: any) {
-        console.error("[CHANGELOG] AI summary generation failed:", aiError.message);
-      }
-
-      const highlights = extractFallbackHighlights(relevantSection);
-      const fallbackResult = { summary: "Here's what's new in the latest updates.", highlights };
-      if (highlights.length > 0) {
-        await storage.setSystemSetting(cacheKey, JSON.stringify(fallbackResult), `Structured changelog summary for ${currentVersion}`, "json");
-      }
-      return res.json({ showModal: true, version: currentVersion, ...fallbackResult });
-    } catch (error: any) {
-      console.error("[CHANGELOG] Failed to check changelog status:", error);
-      res.status(500).json({ message: "Failed to check changelog status" });
-    }
-  });
-
-  app.post("/api/changelog/dismiss", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as any;
-      const { version } = req.body;
-
-      if (!version || typeof version !== "string") {
-        return res.status(400).json({ message: "Version is required" });
-      }
-
-      await storage.updateUser(user.id, { lastDismissedChangelogVersion: version });
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[CHANGELOG] Failed to dismiss changelog:", error);
-      res.status(500).json({ message: "Failed to dismiss changelog" });
-    }
-  });
-
-  // Vocabulary System (admin only for org-level, auto-cascade for context)
-  app.get("/api/vocabulary/organization", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const vocabulary = await storage.getOrganizationVocabulary();
-      res.json(vocabulary);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch organization vocabulary" });
-    }
-  });
-
-  app.put("/api/vocabulary/organization", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const validatedData = vocabularyTermsSchema.parse(req.body);
-      const vocabulary = await storage.setOrganizationVocabulary(validatedData);
-      res.json(vocabulary);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid vocabulary data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to update organization vocabulary" });
-    }
-  });
-
-  // Get vocabulary for a specific context (with cascading: project -> client -> org)
-  app.get("/api/vocabulary/context", requireAuth, async (req, res) => {
-    try {
-      const { projectId, clientId, estimateId } = req.query;
-      const vocabulary = await storage.getVocabularyForContext({
-        projectId: projectId as string | undefined,
-        clientId: clientId as string | undefined,
-        estimateId: estimateId as string | undefined,
-      });
-      res.json(vocabulary);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch vocabulary for context" });
-    }
-  });
-
-  // Get all vocabularies (organization + all clients/projects with overrides)
-  app.get("/api/vocabulary/all", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const vocabularies = await storage.getAllVocabularies();
-      res.json(vocabularies);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch all vocabularies" });
-    }
-  });
-
-  // New Vocabulary Catalog System (uses catalog table and FK references)
-  // Get all vocabulary catalog options (predefined terms)
-  app.get("/api/vocabulary/catalog", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const catalog = await storage.getVocabularyCatalog();
-      res.json(catalog);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch vocabulary catalog" });
-    }
-  });
-
-  // Get vocabulary catalog options by term type
-  app.get("/api/vocabulary/catalog/:termType", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const catalog = await storage.getVocabularyCatalogByType(req.params.termType);
-      res.json(catalog);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch vocabulary catalog for term type" });
-    }
-  });
-
-  // Create new vocabulary term
-  app.post("/api/vocabulary/catalog", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      // Use Zod schema for validation
-      const createVocabularyTermSchema = z.object({
-        termType: z.enum(['epic', 'stage', 'activity', 'workstream', 'milestone']),
-        termValue: z.string().min(1, "Term value is required"),
-        description: z.string().optional(),
-        sortOrder: z.number().int().optional()
-      });
-      
-      const validatedData = createVocabularyTermSchema.parse(req.body);
-      
-      const newTerm = await storage.createVocabularyTerm({
-        ...validatedData,
-        sortOrder: validatedData.sortOrder !== undefined ? validatedData.sortOrder : 999,
-        isActive: true,
-        isSystemDefault: false
-      });
-      
-      res.status(201).json(newTerm);
-    } catch (error: any) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid vocabulary term data", errors: error.errors });
-      }
-      if (error?.code === '23505') { // Unique constraint violation
-        return res.status(400).json({ message: "A term with this type and value already exists" });
-      }
-      console.error("Error creating vocabulary term:", error);
-      res.status(500).json({ message: "Failed to create vocabulary term" });
-    }
-  });
-
-  // Update vocabulary term
-  app.patch("/api/vocabulary/catalog/:id", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      // Use Zod schema for validation
-      const updateVocabularyTermSchema = z.object({
-        termValue: z.string().min(1).optional(),
-        description: z.string().optional(),
-        sortOrder: z.number().int().optional(),
-        isActive: z.boolean().optional()
-      });
-      
-      const validatedData = updateVocabularyTermSchema.parse(req.body);
-      
-      const updated = await storage.updateVocabularyTerm(id, validatedData);
-      res.json(updated);
-    } catch (error: any) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid update data", errors: error.errors });
-      }
-      if (error?.message?.includes('not found')) {
-        return res.status(404).json({ message: "Vocabulary term not found" });
-      }
-      console.error("Error updating vocabulary term:", error);
-      res.status(500).json({ message: "Failed to update vocabulary term" });
-    }
-  });
-
-  // Delete (soft delete) vocabulary term
-  app.delete("/api/vocabulary/catalog/:id", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      // Check if term is being used in organization vocabulary
-      const tenantId = req.user?.tenantId;
-      if (!tenantId) {
-        return res.status(400).json({ message: "Tenant context required for vocabulary operations" });
-      }
-      const orgVocab = await storage.getOrganizationVocabularySelections(tenantId);
-      if (orgVocab) {
-        const usedTermIds = [
-          orgVocab.epicTermId,
-          orgVocab.stageTermId,
-          orgVocab.activityTermId,
-          orgVocab.workstreamTermId,
-          orgVocab.milestoneTermId
-        ].filter(Boolean);
-        
-        if (usedTermIds.includes(id)) {
-          return res.status(400).json({ message: "Cannot delete term that is currently selected as organization default" });
-        }
-      }
-      
-      await storage.deleteVocabularyTerm(id);
-      res.json({ message: "Vocabulary term deleted successfully" });
-    } catch (error) {
-      console.error("Error deleting vocabulary term:", error);
-      res.status(500).json({ message: "Failed to delete vocabulary term" });
-    }
-  });
-
-  // Seed default vocabulary terms
-  app.post("/api/vocabulary/catalog/seed", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      await storage.seedDefaultVocabulary();
-      res.json({ message: "Default vocabulary terms seeded successfully" });
-    } catch (error) {
-      console.error("Error seeding vocabulary terms:", error);
-      res.status(500).json({ message: "Failed to seed vocabulary terms" });
-    }
-  });
-
-  // Get organization vocabulary selections (with term details)
-  app.get("/api/vocabulary/organization/selections", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const tenantId = req.user?.tenantId;
-      if (!tenantId) {
-        return res.status(400).json({ message: "Tenant context required for vocabulary access" });
-      }
-      const selections = await storage.getOrganizationVocabularySelections(tenantId);
-      if (!selections) {
-        return res.status(404).json({ message: "Organization vocabulary not configured" });
-      }
-      
-      // Fetch the actual term details for each selection
-      const epicTerm = selections.epicTermId ? await storage.getVocabularyTermById(selections.epicTermId) : null;
-      const stageTerm = selections.stageTermId ? await storage.getVocabularyTermById(selections.stageTermId) : null;
-      const activityTerm = selections.activityTermId ? await storage.getVocabularyTermById(selections.activityTermId) : null;
-      const workstreamTerm = selections.workstreamTermId ? await storage.getVocabularyTermById(selections.workstreamTermId) : null;
-      const milestoneTerm = selections.milestoneTermId ? await storage.getVocabularyTermById(selections.milestoneTermId) : null;
-      
-      res.json({
-        ...selections,
-        epicTerm,
-        stageTerm,
-        activityTerm,
-        workstreamTerm,
-        milestoneTerm
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch organization vocabulary selections" });
-    }
-  });
-
-  // Update organization vocabulary selections
-  app.put("/api/vocabulary/organization/selections", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const tenantId = req.user?.tenantId;
-      if (!tenantId) {
-        return res.status(400).json({ message: "Tenant context required for vocabulary updates" });
-      }
-      const validatedData = updateOrganizationVocabularySchema.parse(req.body);
-      const updated = await storage.updateOrganizationVocabularySelections(validatedData, tenantId);
-      res.json(updated);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid vocabulary selection data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to update organization vocabulary selections" });
     }
   });
 
@@ -947,7 +55,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   // Portfolio-level slippage summary
   app.get("/api/portfolio/slippage", requireAuth, requireRole(["admin", "billing-admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
-      const { calculatePortfolioSlippage } = await import("./lib/slippage.js");
+      const { calculatePortfolioSlippage } = await import("../lib/slippage.js");
       const tenantId = req.user!.tenantId;
       if (!tenantId) return res.status(400).json({ message: "Tenant context required" });
       const summary = await calculatePortfolioSlippage(tenantId);
@@ -961,7 +69,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   // Single-project slippage metrics
   app.get("/api/projects/:id/slippage", requireAuth, requireRole(["admin", "billing-admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
-      const { calculateProjectSlippage } = await import("./lib/slippage.js");
+      const { calculateProjectSlippage } = await import("../lib/slippage.js");
       const tenantId = req.user!.tenantId;
       if (!tenantId) return res.status(400).json({ message: "Tenant context required" });
       const metrics = await calculateProjectSlippage(req.params.id, tenantId);
@@ -976,7 +84,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   // User-scoped slippage alerts (role-aware: team members see own alerts; PMs/portfolio see more)
   app.get("/api/dashboard/slippage-alerts", requireAuth, async (req, res) => {
     try {
-      const { getUserSlippageAlerts } = await import("./lib/slippage.js");
+      const { getUserSlippageAlerts } = await import("../lib/slippage.js");
       const tenantId = req.user!.tenantId;
       const userId = req.user!.id;
       if (!tenantId) return res.status(400).json({ message: "Tenant context required" });
@@ -1265,8 +373,15 @@ export async function registerRoutes(app: Express): Promise<void> {
       // Auto-create or reactivate engagement when a person is assigned
       if (validatedData.personId) {
         await storage.ensureProjectEngagement(req.params.projectId, validatedData.personId);
+        // Fire-and-forget: auto-add member to Teams if sync is enabled
+        import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+          teamsAutomationService.onUserAssignedToProject(
+            req.params.projectId, validatedData.personId!,
+            { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+          ).catch(() => {});
+        }).catch(() => {});
       }
-      
+
       res.status(201).json(created);
     } catch (error: any) {
       if (error instanceof z.ZodError) {
@@ -1314,8 +429,25 @@ export async function registerRoutes(app: Express): Promise<void> {
       // Auto-create or reactivate engagement when a person is assigned
       if (req.body.personId) {
         await storage.ensureProjectEngagement(req.params.projectId, req.body.personId);
+        // Fire-and-forget: auto-add member to Teams if sync is enabled
+        import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+          teamsAutomationService.onUserAssignedToProject(
+            req.params.projectId, req.body.personId,
+            { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+          ).catch(() => {});
+        }).catch(() => {});
       }
-      
+
+      // Fire-and-forget: if personId changed, remove the previous assignee from Teams
+      if (req.body.personId && allocation && allocation.personId && allocation.personId !== req.body.personId) {
+        import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+          teamsAutomationService.onUserUnassignedFromProject(
+            req.params.projectId, allocation.personId!,
+            { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+          ).catch(() => {});
+        }).catch(() => {});
+      }
+
       res.json(updated);
     } catch (error: any) {
       console.error("[ERROR] Failed to update project allocation:", error);
@@ -1325,7 +457,24 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   app.delete("/api/projects/:projectId/allocations/:id", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
     try {
+      // Fetch the allocation before deleting so we can trigger the unassignment hook
+      const allocation = await storage.getProjectAllocation(req.params.id);
+      if (!allocation) {
+        return res.status(404).json({ message: "Allocation not found" });
+      }
+
       await storage.deleteProjectAllocation(req.params.id);
+
+      // Fire-and-forget: auto-remove member from Teams if sync is enabled
+      if (allocation.personId) {
+        import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+          teamsAutomationService.onUserUnassignedFromProject(
+            req.params.projectId, allocation.personId!,
+            { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+          ).catch(() => {});
+        }).catch(() => {});
+      }
+
       res.status(204).send();
     } catch (error: any) {
       console.error("[ERROR] Failed to delete project allocation:", error);
@@ -1347,7 +496,19 @@ export async function registerRoutes(app: Express): Promise<void> {
       for (const personId of Array.from(personIds)) {
         await storage.ensureProjectEngagement(req.params.projectId, personId);
       }
-      
+
+      // Fire-and-forget: auto-add all assigned members to Teams if sync is enabled
+      if (personIds.size > 0) {
+        import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+          for (const personId of Array.from(personIds)) {
+            teamsAutomationService.onUserAssignedToProject(
+              req.params.projectId, personId,
+              { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+            ).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+
       res.json(updated);
     } catch (error: any) {
       console.error("[ERROR] Failed to bulk update project allocations:", error);
@@ -1387,6 +548,14 @@ export async function registerRoutes(app: Express): Promise<void> {
       await Promise.all(updatePromises);
 
       await storage.ensureProjectEngagement(projectId, personId);
+
+      // Fire-and-forget: auto-add reassigned member to Teams if sync is enabled
+      import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+        teamsAutomationService.onUserAssignedToProject(
+          projectId, personId,
+          { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+        ).catch(() => {});
+      }).catch(() => {});
 
       res.json({ updatedCount: matchingAllocations.length });
     } catch (error: any) {
@@ -1521,6 +690,17 @@ export async function registerRoutes(app: Express): Promise<void> {
     } catch (error: any) {
       console.error("[ERROR] Failed to check last allocation:", error);
       res.status(500).json({ message: "Failed to check last allocation" });
+    }
+  });
+
+  // Get project's Planner connection
+  app.get("/api/projects/:projectId/planner-connection", requireAuth, async (req, res) => {
+    try {
+      const connection = await storage.getProjectPlannerConnection(req.params.projectId);
+      res.json(connection || null);
+    } catch (error: any) {
+      console.error("[PLANNER] Failed to get connection:", error);
+      res.status(500).json({ message: "Failed to get Planner connection" });
     }
   });
 
@@ -1810,7 +990,7 @@ ${dependencySummary}
 RAIDD LOG — Decisions This Period (${recentDecisions.length}):
 ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACTION ITEMS: ${raiddCounts.overdueActionItems} action item(s) are past their due date.` : ""}${raiddCounts.criticalItems > 0 ? `\n⚠️ CRITICAL ITEMS: ${raiddCounts.criticalItems} item(s) are flagged as critical priority.` : ""}`;
 
-      const { aiService, buildGroundingContext } = await import("./services/ai-service.js");
+      const { aiService, buildGroundingContext } = await import("../services/ai-service.js");
       const srTenantId = (req.user as any)?.tenantId;
       const srGroundingDocs = srTenantId
         ? await storage.getActiveGroundingDocumentsForTenant(srTenantId)
@@ -2080,7 +1260,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
   // Trigger sync for a project
   app.post("/api/projects/:projectId/planner-sync", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
     try {
-      const { plannerService } = await import('./services/planner-service');
+      const { plannerService } = await import('../services/planner-service');
       const { projectId } = req.params;
       
       const connection = await storage.getProjectPlannerConnection(projectId);
@@ -2923,98 +2103,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
     } catch (error: any) {
       console.error("[PLANNER] Failed to get sync status:", error);
       res.status(500).json({ message: "Failed to get sync status" });
-    }
-  });
-
-  // User Azure AD mapping endpoints
-  app.get("/api/users/:userId/azure-mapping", requireAuth, async (req, res) => {
-    try {
-      const mapping = await storage.getUserAzureMapping(req.params.userId);
-      res.json(mapping || null);
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to get Azure mapping:", error);
-      res.status(500).json({ message: "Failed to get Azure mapping" });
-    }
-  });
-
-  app.post("/api/users/:userId/azure-mapping", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const { azureUserId, azureUserPrincipalName, azureDisplayName, mappingMethod } = req.body;
-      
-      if (!azureUserId) {
-        return res.status(400).json({ message: "azureUserId is required" });
-      }
-      
-      // Check if mapping already exists
-      const existing = await storage.getUserAzureMapping(req.params.userId);
-      if (existing) {
-        const updated = await storage.updateUserAzureMapping(existing.id, {
-          azureUserId,
-          azureUserPrincipalName,
-          azureDisplayName,
-          mappingMethod: mappingMethod || 'manual',
-          verifiedAt: new Date()
-        });
-        return res.json(updated);
-      }
-      
-      const mapping = await storage.createUserAzureMapping({
-        userId: req.params.userId,
-        azureUserId,
-        azureUserPrincipalName,
-        azureDisplayName,
-        mappingMethod: mappingMethod || 'manual',
-        verifiedAt: new Date()
-      });
-      
-      res.json(mapping);
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to create Azure mapping:", error);
-      res.status(500).json({ message: "Failed to create Azure mapping" });
-    }
-  });
-
-  // Auto-discover Azure AD user by email
-  app.post("/api/users/:userId/azure-mapping/discover", requireAuth, requireRole(["admin"]), async (req, res) => {
-    try {
-      const { plannerService } = await import('./services/planner-service');
-      
-      const user = await storage.getUser(req.params.userId);
-      if (!user || !user.email) {
-        return res.status(404).json({ message: "User not found or has no email" });
-      }
-      
-      const azureUser = await plannerService.findUserByEmail(user.email);
-      if (!azureUser) {
-        return res.status(404).json({ message: "Azure AD user not found for this email" });
-      }
-      
-      // Check if mapping already exists
-      const existing = await storage.getUserAzureMapping(req.params.userId);
-      if (existing) {
-        const updated = await storage.updateUserAzureMapping(existing.id, {
-          azureUserId: azureUser.id,
-          azureUserPrincipalName: azureUser.userPrincipalName,
-          azureDisplayName: azureUser.displayName,
-          mappingMethod: 'email',
-          verifiedAt: new Date()
-        });
-        return res.json(updated);
-      }
-      
-      const mapping = await storage.createUserAzureMapping({
-        userId: req.params.userId,
-        azureUserId: azureUser.id,
-        azureUserPrincipalName: azureUser.userPrincipalName,
-        azureDisplayName: azureUser.displayName,
-        mappingMethod: 'email',
-        verifiedAt: new Date()
-      });
-      
-      res.json(mapping);
-    } catch (error: any) {
-      console.error("[PLANNER] Failed to discover Azure mapping:", error);
-      res.status(500).json({ message: "Failed to discover Azure user: " + error.message });
     }
   });
 
@@ -5773,7 +4861,7 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
 
       let aiReport = "";
       try {
-        const { aiService, buildGroundingContext } = await import("./services/ai-service.js");
+        const { aiService, buildGroundingContext } = await import("../services/ai-service.js");
         const pptxTenantId = (req.user as any)?.tenantId;
         const groundingDocs = pptxTenantId
           ? await storage.getActiveGroundingDocumentsForTenant(pptxTenantId)
@@ -6574,513 +5662,6 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
     }
   });
 
-
-  // Time entries
-  app.get("/api/airports", requireAuth, async (req, res) => {
-    try {
-      const { search, country, limit = "50" } = req.query;
-      const maxLimit = Math.min(parseInt(limit as string) || 50, 200);
-      
-      let airports;
-      
-      if (search && typeof search === "string" && search.length >= 2) {
-        airports = await storage.searchAirportCodes(search, maxLimit);
-      } else if (country && typeof country === "string") {
-        airports = await storage.getAirportCodesByCountry(country, maxLimit);
-      } else {
-        airports = await storage.getAllAirportCodes(maxLimit);
-      }
-      
-      res.json(airports);
-    } catch (error) {
-      console.error("Error fetching airports:", error);
-      res.status(500).json({ message: "Failed to fetch airports" });
-    }
-  });
-  
-  app.get("/api/airports/:iataCode", requireAuth, async (req, res) => {
-    try {
-      const { iataCode } = req.params;
-      
-      if (!iataCode || !/^[A-Z]{3}$/.test(iataCode.toUpperCase())) {
-        return res.status(400).json({ message: "Invalid IATA code format" });
-      }
-      
-      const airport = await storage.getAirportByCode(iataCode.toUpperCase());
-      
-      if (!airport) {
-        return res.status(404).json({ message: "Airport not found" });
-      }
-      
-      res.json(airport);
-    } catch (error) {
-      console.error("Error fetching airport:", error);
-      res.status(500).json({ message: "Failed to fetch airport" });
-    }
-  });
-  
-  app.post("/api/airports/validate", requireAuth, async (req, res) => {
-    try {
-      const { codes } = req.body;
-      
-      if (!Array.isArray(codes)) {
-        return res.status(400).json({ message: "codes must be an array" });
-      }
-      
-      const results: Record<string, { valid: boolean; airport?: any }> = {};
-      
-      for (const code of codes) {
-        if (typeof code === "string" && /^[A-Z]{3}$/.test(code.toUpperCase())) {
-          const airport = await storage.getAirportByCode(code.toUpperCase());
-          results[code.toUpperCase()] = {
-            valid: !!airport,
-            airport: airport || undefined
-          };
-        } else {
-          results[code] = { valid: false };
-        }
-      }
-      
-      res.json(results);
-    } catch (error) {
-      console.error("Error validating airports:", error);
-      res.status(500).json({ message: "Failed to validate airports" });
-    }
-  });
-  
-  app.get("/api/airports/stats/count", requireAuth, async (req, res) => {
-    try {
-      const result = await db.select({ count: sql<number>`count(*)` })
-        .from(airportCodes)
-        .where(eq(airportCodes.isActive, true));
-      res.json({ count: result[0]?.count || 0 });
-    } catch (error) {
-      console.error("Error fetching airport count:", error);
-      res.status(500).json({ message: "Failed to fetch airport count" });
-    }
-  });
-  
-  app.post("/api/platform/airports/upload", requireAuth, upload.single('file'), async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const platformRole = user?.platformRole;
-      
-      if (platformRole !== 'global_admin' && platformRole !== 'constellation_admin') {
-        return res.status(403).json({ message: "Only platform admins can upload airport data" });
-      }
-      
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
-      
-      const csvContent = req.file.buffer.toString('utf-8');
-      const lines = csvContent.split('\n');
-      
-      if (lines.length < 2) {
-        return res.status(400).json({ message: "CSV file is empty or has no data rows" });
-      }
-      
-      const header = lines[0].toLowerCase();
-      const iataCodePattern = /^[A-Z]{3}$/;
-      
-      let iataIndex = -1;
-      let nameIndex = -1;
-      let municipalityIndex = -1;
-      let countryIndex = -1;
-      let regionIndex = -1;
-      let typeIndex = -1;
-      let coordsIndex = -1;
-      
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-      iataIndex = headers.findIndex(h => h.includes('iata') || h === 'code');
-      nameIndex = headers.findIndex(h => h === 'name' || h.includes('airport'));
-      municipalityIndex = headers.findIndex(h => h.includes('municipality') || h.includes('city'));
-      countryIndex = headers.findIndex(h => h.includes('country') || h === 'iso_country');
-      regionIndex = headers.findIndex(h => h.includes('region') || h === 'iso_region');
-      typeIndex = headers.findIndex(h => h === 'type' || h.includes('airport_type'));
-      coordsIndex = headers.findIndex(h => h.includes('coord') || h.includes('gps'));
-      
-      if (iataIndex === -1 || nameIndex === -1) {
-        return res.status(400).json({ 
-          message: "CSV must have columns for IATA code and airport name",
-          headers: headers 
-        });
-      }
-      
-      const airports: Array<{
-        iataCode: string;
-        name: string;
-        municipality: string | null;
-        isoCountry: string | null;
-        isoRegion: string | null;
-        airportType: string | null;
-        coordinates: string | null;
-        isActive: boolean;
-      }> = [];
-      
-      const seenCodes = new Set<string>();
-      let skipped = 0;
-      
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        
-        const parts = parseCSVLine(line);
-        const iataCode = (parts[iataIndex] || '').trim().toUpperCase();
-        
-        if (!iataCodePattern.test(iataCode)) {
-          skipped++;
-          continue;
-        }
-        
-        if (seenCodes.has(iataCode)) {
-          skipped++;
-          continue;
-        }
-        
-        seenCodes.add(iataCode);
-        
-        const name = (parts[nameIndex] || '').trim() || 'Unknown';
-        const municipality = municipalityIndex >= 0 ? (parts[municipalityIndex] || '').trim() || null : null;
-        const isoCountry = countryIndex >= 0 ? (parts[countryIndex] || '').trim() || null : null;
-        const isoRegion = regionIndex >= 0 ? (parts[regionIndex] || '').trim() || null : null;
-        const airportType = typeIndex >= 0 ? (parts[typeIndex] || '').trim() || null : null;
-        const coordinates = coordsIndex >= 0 ? (parts[coordsIndex] || '').trim() || null : null;
-        
-        airports.push({
-          iataCode,
-          name: name === 'null' ? 'Unknown' : name,
-          municipality: municipality === 'null' ? null : municipality,
-          isoCountry: isoCountry === 'null' ? null : isoCountry,
-          isoRegion: isoRegion === 'null' ? null : isoRegion,
-          airportType: airportType === 'null' ? null : airportType,
-          coordinates: coordinates === 'null' ? null : coordinates,
-          isActive: true,
-        });
-      }
-      
-      if (airports.length === 0) {
-        return res.status(400).json({ 
-          message: "No valid 3-letter IATA codes found in the CSV",
-          skipped 
-        });
-      }
-      
-      const inserted = await storage.bulkUpsertAirportCodes(airports);
-      
-      res.json({ 
-        message: "Airport codes uploaded successfully",
-        inserted,
-        skipped,
-        total: airports.length 
-      });
-    } catch (error) {
-      console.error("Error uploading airport codes:", error);
-      res.status(500).json({ message: "Failed to upload airport codes" });
-    }
-  });
-  
-  function parseCSVLine(line: string): string[] {
-    const result: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      
-      if (char === '"') {
-        inQuotes = !inQuotes;
-      } else if (char === "," && !inQuotes) {
-        result.push(current);
-        current = "";
-      } else {
-        current += char;
-      }
-    }
-    result.push(current);
-    
-    return result;
-  }
-
-  // ============================================================================
-  // OCONUS Per Diem Rate Endpoints (Outside Continental US)
-  // ============================================================================
-
-  app.get("/api/oconus/rates", requireAuth, async (req, res) => {
-    try {
-      const { search, country, fiscalYear, limit = "50" } = req.query;
-      const maxLimit = Math.min(parseInt(limit as string) || 50, 200);
-      const year = fiscalYear ? parseInt(fiscalYear as string) : undefined;
-      
-      let rates;
-      
-      if (search && typeof search === "string" && search.length >= 2) {
-        rates = await storage.searchOconusRates(search, year, maxLimit);
-      } else if (country && typeof country === "string") {
-        rates = await storage.getOconusRatesByCountry(country, year, maxLimit);
-      } else {
-        rates = await storage.searchOconusRates("", year, maxLimit);
-      }
-      
-      res.json(rates);
-    } catch (error) {
-      console.error("Error fetching OCONUS rates:", error);
-      res.status(500).json({ message: "Failed to fetch OCONUS rates" });
-    }
-  });
-
-  app.get("/api/oconus/rate", requireAuth, async (req, res) => {
-    try {
-      const { country, location, date, fiscalYear } = req.query;
-      
-      if (!country || !location) {
-        return res.status(400).json({ message: "Country and location are required" });
-      }
-      
-      const travelDate = date ? new Date(date as string) : new Date();
-      const year = fiscalYear ? parseInt(fiscalYear as string) : undefined;
-      
-      const rate = await storage.getOconusRate(
-        country as string,
-        location as string,
-        travelDate,
-        year
-      );
-      
-      if (!rate) {
-        return res.status(404).json({ message: "OCONUS rate not found for this location" });
-      }
-      
-      res.json(rate);
-    } catch (error) {
-      console.error("Error fetching OCONUS rate:", error);
-      res.status(500).json({ message: "Failed to fetch OCONUS rate" });
-    }
-  });
-
-  app.get("/api/oconus/countries", requireAuth, async (req, res) => {
-    try {
-      const { fiscalYear } = req.query;
-      const year = fiscalYear ? parseInt(fiscalYear as string) : undefined;
-      
-      const countries = await storage.getOconusCountries(year);
-      res.json(countries);
-    } catch (error) {
-      console.error("Error fetching OCONUS countries:", error);
-      res.status(500).json({ message: "Failed to fetch OCONUS countries" });
-    }
-  });
-
-  app.get("/api/oconus/locations/:country", requireAuth, async (req, res) => {
-    try {
-      const { country } = req.params;
-      const { fiscalYear } = req.query;
-      const year = fiscalYear ? parseInt(fiscalYear as string) : undefined;
-      
-      const locations = await storage.getOconusLocations(country, year);
-      res.json(locations);
-    } catch (error) {
-      console.error("Error fetching OCONUS locations:", error);
-      res.status(500).json({ message: "Failed to fetch OCONUS locations" });
-    }
-  });
-
-  app.get("/api/oconus/stats/count", requireAuth, async (req, res) => {
-    try {
-      const { fiscalYear } = req.query;
-      const year = fiscalYear ? parseInt(fiscalYear as string) : undefined;
-      
-      const count = await storage.getOconusRateCount(year);
-      res.json({ count, fiscalYear: year || new Date().getFullYear() });
-    } catch (error) {
-      console.error("Error fetching OCONUS rate count:", error);
-      res.status(500).json({ message: "Failed to fetch OCONUS rate count" });
-    }
-  });
-
-  app.get("/api/oconus/stats/fiscal-years", requireAuth, async (req, res) => {
-    try {
-      const fiscalYears = await storage.getOconusFiscalYears();
-      res.json({ fiscalYears });
-    } catch (error) {
-      console.error("Error fetching OCONUS fiscal years:", error);
-      res.status(500).json({ message: "Failed to fetch OCONUS fiscal years" });
-    }
-  });
-
-  app.post("/api/platform/oconus/upload", requireAuth, async (req, res) => {
-    try {
-      const user = (req as any).user;
-      const platformRole = user?.platformRole;
-      
-      if (platformRole !== 'global_admin' && platformRole !== 'constellation_admin') {
-        return res.status(403).json({ message: "Only platform admins can upload OCONUS data" });
-      }
-      
-      // Use a custom multer configuration that accepts ZIP and TXT files
-      const oconusUpload = multer({
-        storage: multer.memoryStorage(),
-        limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-        fileFilter: (req, file, cb) => {
-          const allowedMimeTypes = [
-            'application/zip',
-            'application/x-zip-compressed',
-            'application/x-zip',
-            'text/plain',
-            'application/octet-stream' // Some systems send ZIP as this
-          ];
-          if (allowedMimeTypes.includes(file.mimetype) || 
-              file.originalname.endsWith('.zip') || 
-              file.originalname.endsWith('.txt')) {
-            cb(null, true);
-          } else {
-            cb(new Error(`File type ${file.mimetype} not allowed. Please upload a ZIP or TXT file.`));
-          }
-        }
-      });
-      
-      // Handle the file upload
-      await new Promise<void>((resolve, reject) => {
-        oconusUpload.single('file')(req, res, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-      
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
-      
-      const { fiscalYear } = req.body;
-      const targetYear = fiscalYear ? parseInt(fiscalYear) : new Date().getFullYear();
-      
-      let content: string;
-      const fileName = req.file.originalname?.toLowerCase() || '';
-      const isZipFile = fileName.endsWith('.zip') || 
-        (req.file.buffer[0] === 0x50 && req.file.buffer[1] === 0x4B);
-      
-      if (isZipFile) {
-        const fs = await import('fs');
-        const path = await import('path');
-        const { execSync } = await import('child_process');
-        
-        const tempDir = `/tmp/oconus_upload_${Date.now()}`;
-        const tempZipPath = path.default.join(tempDir, 'uploaded.zip');
-        
-        fs.default.mkdirSync(tempDir, { recursive: true });
-        fs.default.writeFileSync(tempZipPath, req.file.buffer);
-        
-        try {
-          execSync(`unzip -o "${tempZipPath}" -d "${tempDir}"`, { stdio: 'pipe' });
-          
-          const files = fs.default.readdirSync(tempDir);
-          const oconusFile = files
-            .filter((f: string) => f.endsWith('oconus.txt') && !f.includes('oconusnm'))
-            .sort()
-            .pop();
-          
-          if (!oconusFile) {
-            fs.default.rmSync(tempDir, { recursive: true });
-            return res.status(400).json({ 
-              message: "No OCONUS data file found in ZIP. Expected a file ending with 'oconus.txt'" 
-            });
-          }
-          
-          content = fs.default.readFileSync(path.default.join(tempDir, oconusFile), 'utf-8');
-          fs.default.rmSync(tempDir, { recursive: true });
-        } catch (err) {
-          if (fs.default.existsSync(tempDir)) {
-            fs.default.rmSync(tempDir, { recursive: true });
-          }
-          throw err;
-        }
-      } else {
-        content = req.file.buffer.toString('utf-8');
-      }
-      
-      const lines = content.split('\n');
-      
-      const rates: Array<{
-        country: string;
-        location: string;
-        seasonStart: string;
-        seasonEnd: string;
-        lodging: number;
-        mie: number;
-        proportionalMeals: number | null;
-        incidentals: number | null;
-        maxPerDiem: number;
-        effectiveDate: string | null;
-        fiscalYear: number;
-        isActive: boolean;
-      }> = [];
-      
-      const seenLocations = new Set<string>();
-      let skipped = 0;
-      
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        
-        const parts = line.split(';');
-        if (parts.length < 12) {
-          skipped++;
-          continue;
-        }
-        
-        const country = parts[0]?.trim() || "";
-        const location = parts[1]?.trim() || "";
-        const seasonStart = parts[2]?.trim() || "";
-        const seasonEnd = parts[3]?.trim() || "";
-        const lodging = parseInt(parts[4]) || 0;
-        const mie = parseInt(parts[5]) || 0;
-        const proportionalMeals = parts[6] ? parseInt(parts[6]) : null;
-        const incidentals = parts[7] ? parseInt(parts[7]) : null;
-        const maxPerDiem = parseInt(parts[10]) || 0;
-        const effectiveDate = parts[11]?.trim() || null;
-        
-        if (!country || !location || !seasonStart || !seasonEnd) {
-          skipped++;
-          continue;
-        }
-        
-        const locationKey = `${country}|${location}|${seasonStart}|${seasonEnd}`;
-        if (seenLocations.has(locationKey)) {
-          skipped++;
-          continue;
-        }
-        seenLocations.add(locationKey);
-        
-        rates.push({
-          country,
-          location,
-          seasonStart,
-          seasonEnd,
-          lodging,
-          mie,
-          proportionalMeals,
-          incidentals,
-          maxPerDiem,
-          effectiveDate,
-          fiscalYear: targetYear,
-          isActive: true,
-        });
-      }
-      
-      await storage.deleteOconusRatesByFiscalYear(targetYear);
-      const inserted = await storage.bulkInsertOconusRates(rates);
-      
-      res.json({
-        message: "OCONUS rates uploaded successfully",
-        inserted,
-        skipped,
-        fiscalYear: targetYear
-      });
-    } catch (error) {
-      console.error("Error uploading OCONUS rates:", error);
-      res.status(500).json({ message: "Failed to upload OCONUS rates" });
-    }
-  });
-
   // Project milestones (these may already exist, but adding for completeness)
   app.get("/api/projects/:projectId/milestones", requireAuth, async (req, res) => {
     try {
@@ -7191,383 +5772,922 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
     }
   });
 
-  // SharePoint Container Admin routes are now in server/routes/sharepoint-containers.ts
+  // ============================================================================
+  // RAIDD Log Routes
+  // ============================================================================
 
-  // Authentication endpoints are handled by auth-routes.ts with shared session store
-
-  // SSO status endpoint
-  app.get("/api/auth/sso/status", async (req, res) => {
+  app.get("/api/projects/:id/raidd", requireAuth, async (req, res) => {
     try {
-      res.json({
-        configured: isEntraConfigured,
-        enabled: isEntraConfigured
-      });
-    } catch (error) {
-      console.error("SSO status error:", error);
-      res.status(500).json({ message: "Failed to get SSO status" });
-    }
-  });
-
-  // SSO login endpoint - initiates auth flow (MUST be before middleware)
-  app.get("/api/auth/sso/login", async (req, res) => {
-    console.log("[SSO-LOGIN] Initiating SSO login flow");
-    console.log("[SSO-LOGIN] Request headers:", {
-      'x-session-id': req.headers['x-session-id'] ? 'present' : 'absent',
-      'user-agent': req.headers['user-agent'],
-      'referer': req.headers['referer']
-    });
-    
-    try {
-      if (!msalInstance) {
-        console.error("[SSO-LOGIN] MSAL instance not configured");
-        return res.status(503).json({ message: "SSO not configured" });
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
       }
-
-      console.log("[SSO-LOGIN] Generating auth URL with redirect URI:", authCodeRequest.redirectUri);
-      const authUrl = await msalInstance.getAuthCodeUrl(authCodeRequest);
-      console.log("[SSO-LOGIN] Auth URL generated successfully");
-      res.json({ authUrl });
+      const filters: any = {};
+      if (req.query.type) filters.type = req.query.type;
+      if (req.query.status) filters.status = req.query.status;
+      if (req.query.priority) filters.priority = req.query.priority;
+      if (req.query.ownerId) filters.ownerId = req.query.ownerId;
+      if (req.query.assigneeId) filters.assigneeId = req.query.assigneeId;
+      const entries = await storage.getRaiddEntries(req.params.id, filters);
+      res.json(entries);
     } catch (error: any) {
-      console.error("[SSO-LOGIN] Failed to generate auth URL:", {
-        error: error.message,
-        errorCode: error.errorCode,
-        stack: error.stack
-      });
-      res.status(500).json({ message: "Failed to initiate SSO login" });
+      console.error("Error fetching RAIDD entries:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch RAIDD entries" });
     }
   });
 
-  // SSO callback endpoint - handles Azure AD redirect (MUST be before middleware)
-  app.get("/api/auth/callback", async (req, res) => {
-    console.log("[SSO-CALLBACK] Processing Azure AD callback");
-    console.log("[SSO-CALLBACK] Query params:", {
-      hasCode: !!req.query.code,
-      hasError: !!req.query.error,
-      errorDescription: req.query.error_description
-    });
-    
+  app.post("/api/projects/:id/raidd", requireAuth, requireRole(["admin", "pm", "employee"]), async (req, res) => {
     try {
-      if (!msalInstance) {
-        console.error("[SSO-CALLBACK] MSAL instance not configured");
-        return res.redirect("/?error=sso_not_configured");
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
       }
-
-      const { code, error, error_description } = req.query;
-      
-      // Handle Azure AD errors
-      if (error) {
-        console.error("[SSO-CALLBACK] Azure AD returned error:", {
-          error,
-          description: error_description
-        });
-        return res.redirect(`/?error=${error}`);
-      }
-      
-      if (!code || typeof code !== 'string') {
-        console.error("[SSO-CALLBACK] Missing or invalid authorization code");
-        return res.redirect("/?error=missing_auth_code");
-      }
-
-      console.log("[SSO-CALLBACK] Exchanging auth code for tokens");
-      // Exchange authorization code for tokens
-      const tokenResponse = await msalInstance.acquireTokenByCode({
-        ...authCodeRequest,
-        code
-      });
-
-      if (!tokenResponse?.account) {
-        console.error("[SSO-CALLBACK] No account in token response");
-        return res.redirect("/?error=no_account");
-      }
-
-      const userEmail = tokenResponse.account.username;
-      const azureAdTenantId = tokenResponse.account.tenantId;
-      const azureAdObjectId = tokenResponse.account.localAccountId;
-      console.log("[SSO-CALLBACK] Token exchange successful for user:", userEmail);
-      console.log("[SSO-CALLBACK] Token details:", {
-        hasAccessToken: !!tokenResponse.accessToken,
-        hasRefreshToken: !!(tokenResponse as any).refreshToken,
-        expiresOn: tokenResponse.expiresOn,
-        scopes: tokenResponse.scopes,
-        azureTenantId: azureAdTenantId
-      });
-
-      // Look up user in database by email (case-insensitive)
-      const [foundUser] = await db.select()
-        .from(users)
-        .where(sql`LOWER(${users.email}) = LOWER(${userEmail})`);
-
-      let activeUser = foundUser;
-
-      if (!activeUser) {
-        // ── JIT provisioning (Vega pattern) ─────────────────────────────────
-        console.log("[SSO-CALLBACK] User not found, starting JIT provisioning for:", userEmail);
-        const emailDomain = userEmail.split('@')[1]?.toLowerCase();
-        if (!emailDomain) return res.redirect("/?error=invalid_email");
-
-        // Find matching tenant: Azure tenant ID first, then email domain
-        const allTenants = await db.select().from(tenants);
-        let matchingTenant = allTenants.find(t => t.azureTenantId === azureAdTenantId) ?? null;
-        const isPublicDomain = isPublicEmailDomain(userEmail);
-        if (!matchingTenant && !isPublicDomain) {
-          matchingTenant = allTenants.find(t => {
-            const domains = (t.allowedDomains as string[] | null) ?? [];
-            return domains.includes(emailDomain);
-          }) ?? null;
-        }
-
-        let isNewTenant = false;
-        let newUserRole = 'employee';
-
-        if (!matchingTenant) {
-          // Check domain block list
-          const [blocked] = await db.select().from(blockedDomains)
-            .where(eq(blockedDomains.domain, emailDomain));
-          if (blocked) {
-            console.log(`[SSO-CALLBACK] Domain ${emailDomain} is blocked`);
-            return res.redirect("/?error=domain_blocked");
-          }
-
-          // Resolve default service plan
-          const [defaultPlan] = await db.select().from(servicePlans)
-            .where(and(eq(servicePlans.isDefault, true), eq(servicePlans.isActive, true)));
-          const planId = defaultPlan?.id ?? null;
-          const now = new Date();
-          const planExpiresAt = defaultPlan?.trialDurationDays
-            ? new Date(now.getTime() + defaultPlan.trialDurationDays * 24 * 60 * 60 * 1000)
-            : null;
-
-          const { randomUUID } = await import('crypto');
-
-          if (isPublicDomain) {
-            // Personal tenant — invite-only, no domain/Azure tenant claim
-            const userName = userEmail.split('@')[0];
-            const slug = `user-${randomUUID().substring(0, 8)}`;
-            const [newTenant] = await db.insert(tenants).values({
-              name: `${userName}'s Organization`,
-              slug,
-              allowedDomains: [],
-              selfServiceSignup: true,
-              signupCompletedAt: now,
-              servicePlanId: planId,
-              planStartedAt: now,
-              planExpiresAt,
-              planStatus: planExpiresAt ? 'trial' : 'active',
-              inviteOnly: true,
-              azureTenantId: null,
-              allowLocalAuth: false,
-            }).returning();
-            matchingTenant = newTenant;
-            console.log(`[SSO-CALLBACK] Created invite-only tenant for public-domain user: ${newTenant.id}`);
-          } else {
-            // Business tenant — claims the domain and links Azure tenant
-            const companyName = emailDomain.split('.')[0];
-            const capName = companyName.charAt(0).toUpperCase() + companyName.slice(1);
-            let slug = emailDomain.replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-            const [existingSlug] = await db.select().from(tenants).where(eq(tenants.slug, slug));
-            if (existingSlug) slug = `${slug}-${randomUUID().substring(0, 6)}`;
-            const [newTenant] = await db.insert(tenants).values({
-              name: `${capName} (${emailDomain})`,
-              slug,
-              allowedDomains: [emailDomain],
-              selfServiceSignup: true,
-              signupCompletedAt: now,
-              servicePlanId: planId,
-              planStartedAt: now,
-              planExpiresAt,
-              planStatus: planExpiresAt ? 'trial' : 'active',
-              inviteOnly: false,
-              azureTenantId: azureAdTenantId ?? null,
-              allowLocalAuth: false,
-            }).returning();
-            matchingTenant = newTenant;
-            console.log(`[SSO-CALLBACK] Created SSO tenant for ${emailDomain}: ${newTenant.id}`);
-          }
-
-          isNewTenant = true;
-          newUserRole = 'admin'; // First user in a new tenant is admin
-
-          // HubSpot CRM notification (non-blocking stub — extend when deal ID is available)
-          try {
-            const hubConnected = await isHubSpotConnected(matchingTenant.id);
-            if (hubConnected) {
-              console.log(`[SSO-JIT] HubSpot connected for new tenant ${matchingTenant.id}; deal creation deferred.`);
-            }
-          } catch { /* non-critical */ }
-
-        } else {
-          // Tenant found — enforce invite-only policy
-          if (matchingTenant.inviteOnly === true) {
-            console.log(`[SSO-CALLBACK] Tenant ${matchingTenant.name} is invite-only, blocking auto-join for ${userEmail}`);
-            const tenantNameEncoded = encodeURIComponent(matchingTenant.name);
-            return res.redirect(`/?error=invite_only&tenant_name=${tenantNameEncoded}`);
-          }
-          console.log(`[SSO-CALLBACK] Found tenant ${matchingTenant.name}, allowing JIT auto-join`);
-        }
-
-        // Infer display name from email local-part (e.g. john.smith → John Smith)
-        const localPart = userEmail.split('@')[0];
-        const nameParts = localPart.split(/[._-]/);
-        const inferredName = nameParts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
-        const initials = nameParts.map(p => p[0]?.toUpperCase() ?? '').join('').substring(0, 2) || 'U';
-
-        const [newUser] = await db.insert(users).values({
-          email: userEmail.toLowerCase(),
-          name: inferredName,
-          initials,
-          role: newUserRole,
-          canLogin: true,
-          isAssignable: true,
-          isActive: true,
-          primaryTenantId: matchingTenant.id,
-          platformRole: 'user',
-          authProvider: 'entra',
-          azureObjectId: azureAdObjectId ?? null,
-        }).returning();
-
-        await db.insert(tenantUsers).values({
-          userId: newUser.id,
-          tenantId: matchingTenant.id,
-          role: newUserRole,
-          status: 'active',
-          joinedAt: new Date(),
-        });
-
-        activeUser = newUser;
-        console.log(`[SSO-CALLBACK] JIT provisioned ${userEmail} → tenant ${matchingTenant.id} (${isNewTenant ? 'new tenant' : 'existing tenant'}), role: ${newUserRole}`);
-
-      } else {
-        // Existing user — back-fill Azure linkage and auto-populate azureTenantId on tenant
-        console.log("[SSO-CALLBACK] Found existing user:", { id: activeUser.id, email: activeUser.email, role: activeUser.role });
-
-        if (azureAdObjectId && !activeUser.azureObjectId) {
-          await db.update(users)
-            .set({ azureObjectId: azureAdObjectId, authProvider: 'entra' })
-            .where(eq(users.id, activeUser.id));
-        }
-
-        if (azureAdTenantId && activeUser.primaryTenantId) {
-          const [userTenant] = await db.select().from(tenants)
-            .where(eq(tenants.id, activeUser.primaryTenantId)).limit(1);
-          if (userTenant && !userTenant.azureTenantId) {
-            await db.update(tenants)
-              .set({ azureTenantId: azureAdTenantId })
-              .where(eq(tenants.id, userTenant.id));
-            console.log(`[SSO-CALLBACK] Auto-populated azureTenantId=${azureAdTenantId} for tenant ${userTenant.slug}`);
-          }
-        }
-      }
-
-      // Create session with actual database user ID and SSO tokens
-      const { createSession } = await import("./session-store.js");
-      const crypto = await import('crypto');
-      const sessionId = crypto.randomUUID();
-      
-      let extractedRefreshToken: string | null = null;
-      try {
-        const cacheContents = msalInstance.getTokenCache().serialize();
-        const cacheJson = JSON.parse(cacheContents);
-        const refreshTokens = cacheJson.RefreshToken || {};
-        const rtKeys = Object.keys(refreshTokens);
-        if (rtKeys.length > 0) {
-          const homeAccountId = tokenResponse.account?.homeAccountId;
-          const matchingKey = homeAccountId
-            ? rtKeys.find(k => refreshTokens[k].home_account_id === homeAccountId)
-            : rtKeys[rtKeys.length - 1];
-          const rtEntry = refreshTokens[matchingKey || rtKeys[rtKeys.length - 1]];
-          extractedRefreshToken = rtEntry?.secret || null;
-          console.log("[SSO-CALLBACK] Refresh token extracted from MSAL cache:", !!extractedRefreshToken);
-        }
-      } catch (cacheErr: any) {
-        console.log("[SSO-CALLBACK] Could not extract refresh token from MSAL cache:", cacheErr?.message);
-      }
-
-      const ssoData = {
-        provider: 'azure-ad',
-        accessToken: tokenResponse.accessToken,
-        refreshToken: extractedRefreshToken,
-        tokenExpiry: tokenResponse.expiresOn || new Date(Date.now() + 3600 * 1000)
+      const body = {
+        ...req.body,
+        projectId: req.params.id,
+        tenantId: project.tenantId || tenantId,
+        createdBy: req.user!.id,
+        updatedBy: req.user!.id,
       };
-      
-      console.log("[SSO-CALLBACK] Creating session:", {
-        sessionId: sessionId.substring(0, 8) + '...',
-        hasRefreshToken: !!ssoData.refreshToken,
-        tokenExpiry: ssoData.tokenExpiry
-      });
-      
-      await createSession(sessionId, {
-        id: activeUser.id,
-        email: activeUser.email,
-        name: activeUser.name,
-        role: activeUser.role,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent']
-      }, ssoData);
-
-      console.log("[SSO-CALLBACK] Session created successfully, redirecting user");
-      // Redirect to app with session ID
-      res.redirect(`/?sessionId=${sessionId}`);
+      const parsed = insertRaiddEntrySchema.parse(body);
+      const entry = await storage.createRaiddEntry(parsed);
+      res.status(201).json(entry);
     } catch (error: any) {
-      console.error("[SSO-CALLBACK] Fatal error during callback processing:", {
-        message: error.message,
-        errorCode: error.errorCode,
-        stack: error.stack,
-        details: error
-      });
-      res.redirect("/?error=sso_failed");
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      console.error("Error creating RAIDD entry:", error);
+      res.status(500).json({ message: error.message || "Failed to create RAIDD entry" });
     }
   });
 
-  // SSO token refresh endpoint (requires auth)
-  app.post("/api/auth/sso/refresh", requireAuth, handleTokenRefresh);
-  
-  // Apply token refresh check middleware to protected routes (AFTER SSO login/callback endpoints)
-  app.use("/api/*", checkAndRefreshToken);
-
-  // ── Public page analytics ────────────────────────────────────────────────
-  // POST /api/analytics/pageview  — no auth (public pages)
-  app.post("/api/analytics/pageview", async (req, res) => {
+  app.get("/api/raidd/:id", requireAuth, async (req, res) => {
     try {
-      const { path, sessionId, referrer } = req.body || {};
-      if (!path || typeof path !== "string") return res.status(400).json({ message: "path required" });
-      const allowedPaths = ["/", "/signup", "/login"];
-      if (!allowedPaths.includes(path)) return res.status(400).json({ message: "path not tracked" });
-      await db.insert(pageViews).values({
-        path,
-        sessionId: sessionId ? String(sessionId).slice(0, 128) : null,
-        referrer: referrer ? String(referrer).slice(0, 512) : null,
-        userAgent: req.headers["user-agent"]?.slice(0, 512) ?? null,
-      });
-      res.json({ ok: true });
+      const entry = await storage.getRaiddEntry(req.params.id);
+      if (!entry) return res.status(404).json({ message: "RAIDD entry not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && entry.tenantId && entry.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const childEntries = await storage.getRaiddEntries(entry.projectId, {});
+      const children = childEntries.filter(e => e.parentEntryId === entry.id);
+      const convertedFrom = entry.convertedFromId ? await storage.getRaiddEntry(entry.convertedFromId) : null;
+      const supersededBy = entry.supersededById ? await storage.getRaiddEntry(entry.supersededById) : null;
+      res.json({ ...entry, children, convertedFrom, supersededBy });
     } catch (error: any) {
-      console.error("[ANALYTICS] pageview record failed:", error);
-      res.status(500).json({ message: "Failed to record pageview" });
+      console.error("Error fetching RAIDD entry:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch RAIDD entry" });
     }
   });
 
-  // GET /api/analytics/pageviews  — admin only
-  app.get("/api/analytics/pageviews", requireAuth, requirePlatformAdmin, async (req, res) => {
+  app.patch("/api/raidd/:id", requireAuth, requireRole(["admin", "pm", "employee"]), async (req, res) => {
     try {
-      const days = Math.min(parseInt(String(req.query.days || "30")), 365);
-      const since = new Date(Date.now() - days * 86400_000).toISOString();
-
-      const rows = await db
-        .select({
-          path: pageViews.path,
-          visits: sql<number>`cast(count(*) as integer)`,
-          uniqueSessions: sql<number>`cast(count(distinct ${pageViews.sessionId}) as integer)`,
-          lastSeen: sql<string>`max(${pageViews.createdAt})`,
-        })
-        .from(pageViews)
-        .where(gte(pageViews.createdAt, new Date(since)))
-        .groupBy(pageViews.path)
-        .orderBy(desc(sql`count(*)`));
-
-      res.json({ days, since, rows });
+      const entry = await storage.getRaiddEntry(req.params.id);
+      if (!entry) return res.status(404).json({ message: "RAIDD entry not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && entry.tenantId && entry.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const updateSchema = insertRaiddEntrySchema.partial().omit({
+        tenantId: true,
+        projectId: true,
+        type: true,
+        createdBy: true,
+      });
+      const parsed = updateSchema.parse(req.body);
+      if (entry.type === 'action_item' && entry.parentEntryId && parsed.parentEntryId === null) {
+        return res.status(400).json({ message: "Action items must remain linked to a parent RAIDD entry" });
+      }
+      const updates = { ...parsed, updatedBy: req.user!.id };
+      const updated = await storage.updateRaiddEntry(req.params.id, updates);
+      res.json(updated);
     } catch (error: any) {
-      console.error("[ANALYTICS] pageviews summary failed:", error);
-      res.status(500).json({ message: "Failed to fetch pageviews" });
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      console.error("Error updating RAIDD entry:", error);
+      res.status(error.message?.includes('cannot be modified') ? 400 : 500).json({ message: error.message || "Failed to update RAIDD entry" });
     }
   });
 
+  app.delete("/api/raidd/:id", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
+    try {
+      const entry = await storage.getRaiddEntry(req.params.id);
+      if (!entry) return res.status(404).json({ message: "RAIDD entry not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && entry.tenantId && entry.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      await storage.deleteRaiddEntry(req.params.id);
+      res.json({ message: "RAIDD entry deleted" });
+    } catch (error: any) {
+      console.error("Error deleting RAIDD entry:", error);
+      res.status(error.message?.includes('Cannot delete') ? 400 : 500).json({ message: error.message || "Failed to delete RAIDD entry" });
+    }
+  });
+
+  app.post("/api/raidd/:id/convert-to-issue", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+    try {
+      const entry = await storage.getRaiddEntry(req.params.id);
+      if (!entry) return res.status(404).json({ message: "RAIDD entry not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && entry.tenantId && entry.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const issue = await storage.convertRiskToIssue(req.params.id, req.user!.id);
+      res.json(issue);
+    } catch (error: any) {
+      console.error("Error converting risk to issue:", error);
+      res.status(400).json({ message: error.message || "Failed to convert risk to issue" });
+    }
+  });
+
+  app.post("/api/raidd/:id/supersede", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+    try {
+      const entry = await storage.getRaiddEntry(req.params.id);
+      if (!entry) return res.status(404).json({ message: "RAIDD entry not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && entry.tenantId && entry.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const body = {
+        ...req.body,
+        projectId: entry.projectId,
+        tenantId: entry.tenantId,
+        createdBy: req.user!.id,
+        updatedBy: req.user!.id,
+      };
+      const parsed = insertRaiddEntrySchema.parse(body);
+      const newDecision = await storage.supersedeDecision(req.params.id, parsed);
+      res.json(newDecision);
+    } catch (error: any) {
+      console.error("Error superseding decision:", error);
+      res.status(400).json({ message: error.message || "Failed to supersede decision" });
+    }
+  });
+
+  app.get("/api/projects/:id/raidd/export", requireAuth, requireRole(["admin", "pm", "employee"]), async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const entries = await storage.getRaiddEntries(req.params.id, {});
+      const xlsx = await import("xlsx");
+      const wb = xlsx.utils.book_new();
+      const headers = ["Ref #", "Type", "Title", "Description", "Status", "Priority", "Impact", "Likelihood", "Owner", "Assignee", "Due Date", "Category", "Mitigation Plan", "Resolution Notes", "Tags", "Created Date"];
+      const rows = entries.map((e: any) => [
+        e.refNumber || "",
+        e.type || "",
+        e.title || "",
+        e.description || "",
+        e.status || "",
+        e.priority || "",
+        e.impact || "",
+        e.likelihood || "",
+        e.ownerName || "",
+        e.assigneeName || "",
+        e.dueDate ? new Date(e.dueDate).toLocaleDateString() : "",
+        e.category || "",
+        e.mitigationPlan || "",
+        e.resolutionNotes || "",
+        Array.isArray(e.tags) ? e.tags.join(", ") : "",
+        e.createdAt ? new Date(e.createdAt).toLocaleDateString() : "",
+      ]);
+      const ws = xlsx.utils.aoa_to_sheet([headers, ...rows]);
+      ws["!cols"] = [
+        { wch: 10 }, { wch: 15 }, { wch: 30 }, { wch: 40 }, { wch: 12 },
+        { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 20 }, { wch: 20 },
+        { wch: 12 }, { wch: 15 }, { wch: 30 }, { wch: 30 }, { wch: 20 }, { wch: 12 },
+      ];
+      xlsx.utils.book_append_sheet(wb, ws, "RAIDD Export");
+      const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+      const safeName = (project.name || "project").replace(/[^a-zA-Z0-9_\- ]/g, "");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}-RAIDD-Export.xlsx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.send(Buffer.from(buf));
+    } catch (error: any) {
+      console.error("Error exporting RAIDD entries:", error);
+      res.status(500).json({ message: error.message || "Failed to export RAIDD entries" });
+    }
+  });
+
+  app.get("/api/projects/:id/raidd/template", requireAuth, async (req, res) => {
+    try {
+      const xlsx = await import("xlsx");
+      const wb = xlsx.utils.book_new();
+      const importHeaders = ["Type", "Title", "Description", "Status", "Priority", "Impact", "Likelihood", "Owner (Name or Email)", "Assignee (Name or Email)", "Due Date", "Category", "Mitigation Plan", "Tags (comma-separated)"];
+      const exampleRows = [
+        ["risk", "Data migration failure", "Risk of data loss during migration", "open", "high", "high", "possible", "john@example.com", "jane@example.com", "2026-03-15", "Technical", "Run test migration first", "migration, data"],
+        ["issue", "API rate limiting", "Third-party API rate limits exceeded", "in_progress", "medium", "medium", "", "John Smith", "", "2026-02-28", "Integration", "Implement retry logic", "api, performance"],
+        ["decision", "Use PostgreSQL", "Selected PostgreSQL over MongoDB for data store", "accepted", "low", "", "", "", "", "", "Architecture", "", "database, architecture"],
+      ];
+      const emptyRows = Array.from({ length: 30 }, () => Array(importHeaders.length).fill(""));
+      const ws1 = xlsx.utils.aoa_to_sheet([importHeaders, ...exampleRows, ...emptyRows]);
+      ws1["!cols"] = [
+        { wch: 15 }, { wch: 30 }, { wch: 40 }, { wch: 12 }, { wch: 10 },
+        { wch: 10 }, { wch: 15 }, { wch: 25 }, { wch: 25 },
+        { wch: 12 }, { wch: 15 }, { wch: 30 }, { wch: 25 },
+      ];
+      xlsx.utils.book_append_sheet(wb, ws1, "RAIDD Import");
+      const refData = [
+        ["Field", "Allowed Values"],
+        ["Type", "risk, issue, decision, dependency, action_item"],
+        ["Status", "open, in_progress, mitigated, closed, deferred, superseded, resolved, accepted"],
+        ["Priority", "critical, high, medium, low"],
+        ["Impact", "critical, high, medium, low"],
+        ["Likelihood", "almost_certain, likely, possible, unlikely, rare"],
+      ];
+      const ws2 = xlsx.utils.aoa_to_sheet(refData);
+      ws2["!cols"] = [{ wch: 15 }, { wch: 60 }];
+      xlsx.utils.book_append_sheet(wb, ws2, "Reference Values");
+      const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Disposition", `attachment; filename="RAIDD-Import-Template.xlsx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.send(Buffer.from(buf));
+    } catch (error: any) {
+      console.error("Error generating RAIDD template:", error);
+      res.status(500).json({ message: error.message || "Failed to generate RAIDD template" });
+    }
+  });
+
+  app.post("/api/projects/:id/raidd/import", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const xlsx = await import("xlsx");
+      const fileData = req.body.file;
+      if (!fileData) return res.status(400).json({ message: "No file data provided" });
+      const buffer = Buffer.from(fileData, "base64");
+      const workbook = xlsx.read(buffer, { type: "buffer" });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+      const raiiddTenantId = req.user?.tenantId;
+      const allUsers = await storage.getUsers(raiiddTenantId);
+      const userEmailToId = new Map(allUsers.filter((u: any) => u.email).map((u: any) => [u.email.toLowerCase(), u.id]));
+      const userNameToId = new Map(allUsers.map((u: any) => [u.name.toLowerCase(), u.id]));
+
+      const validTypes = ["risk", "issue", "decision", "dependency", "action_item"];
+      const validStatuses = ["open", "in_progress", "mitigated", "closed", "deferred", "superseded", "resolved", "accepted"];
+      const validPriorities = ["critical", "high", "medium", "low"];
+      const validImpacts = ["critical", "high", "medium", "low"];
+      const validLikelihoods = ["almost_certain", "likely", "possible", "unlikely", "rare"];
+
+      const errors: { row: number; message: string }[] = [];
+      let created = 0;
+
+      for (let i = 1; i < data.length; i++) {
+        try {
+          const row = data[i];
+          if (!row || row.every((cell: any) => !cell && cell !== 0)) continue;
+
+          const rawType = String(row[0] || "").trim().toLowerCase();
+          const title = String(row[1] || "").trim();
+          const description = String(row[2] || "").trim();
+          const rawStatus = String(row[3] || "").trim().toLowerCase();
+          const rawPriority = String(row[4] || "").trim().toLowerCase();
+          const rawImpact = String(row[5] || "").trim().toLowerCase();
+          const rawLikelihood = String(row[6] || "").trim().toLowerCase();
+          const ownerRef = String(row[7] || "").trim();
+          const assigneeRef = String(row[8] || "").trim();
+          const rawDueDate = row[9];
+          const category = String(row[10] || "").trim();
+          const mitigationPlan = String(row[11] || "").trim();
+          const rawTags = String(row[12] || "").trim();
+
+          if (!validTypes.includes(rawType)) {
+            errors.push({ row: i + 1, message: `Invalid type "${row[0]}". Must be one of: ${validTypes.join(", ")}` });
+            continue;
+          }
+          if (!title) {
+            errors.push({ row: i + 1, message: "Title is required" });
+            continue;
+          }
+          const status = rawStatus ? (validStatuses.includes(rawStatus) ? rawStatus : null) : "open";
+          if (status === null) {
+            errors.push({ row: i + 1, message: `Invalid status "${row[3]}". Must be one of: ${validStatuses.join(", ")}` });
+            continue;
+          }
+          const priority = rawPriority ? (validPriorities.includes(rawPriority) ? rawPriority : null) : "medium";
+          if (priority === null) {
+            errors.push({ row: i + 1, message: `Invalid priority "${row[4]}". Must be one of: ${validPriorities.join(", ")}` });
+            continue;
+          }
+          let impact: string | undefined;
+          if (rawImpact) {
+            if (!validImpacts.includes(rawImpact)) {
+              errors.push({ row: i + 1, message: `Invalid impact "${row[5]}". Must be one of: ${validImpacts.join(", ")}` });
+              continue;
+            }
+            impact = rawImpact;
+          }
+          let likelihood: string | undefined;
+          if (rawLikelihood) {
+            if (!validLikelihoods.includes(rawLikelihood)) {
+              errors.push({ row: i + 1, message: `Invalid likelihood "${row[6]}". Must be one of: ${validLikelihoods.join(", ")}` });
+              continue;
+            }
+            likelihood = rawLikelihood;
+          }
+
+          let ownerId: string | undefined;
+          if (ownerRef) {
+            const lc = ownerRef.toLowerCase();
+            ownerId = userEmailToId.get(lc) || userNameToId.get(lc);
+          }
+          let assigneeId: string | undefined;
+          if (assigneeRef) {
+            const lc = assigneeRef.toLowerCase();
+            assigneeId = userEmailToId.get(lc) || userNameToId.get(lc);
+          }
+
+          let dueDate: string | undefined;
+          if (rawDueDate) {
+            if (typeof rawDueDate === "number") {
+              const d = xlsx.SSF.parse_date_code(rawDueDate);
+              if (d) dueDate = `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+            } else {
+              const parsed = new Date(String(rawDueDate));
+              if (!isNaN(parsed.getTime())) {
+                dueDate = parsed.toISOString().split("T")[0];
+              }
+            }
+          }
+
+          const tags = rawTags ? rawTags.split(",").map((t: string) => t.trim()).filter(Boolean) : undefined;
+
+          await storage.createRaiddEntry({
+            projectId: req.params.id,
+            tenantId: project.tenantId || tenantId || "",
+            type: rawType,
+            title,
+            description: description || undefined,
+            status,
+            priority,
+            impact,
+            likelihood,
+            ownerId,
+            assigneeId,
+            dueDate,
+            category: category || undefined,
+            mitigationPlan: mitigationPlan || undefined,
+            tags,
+            createdBy: req.user!.id,
+            updatedBy: req.user!.id,
+          });
+          created++;
+        } catch (rowError: any) {
+          errors.push({ row: i + 1, message: rowError.message || "Unknown error" });
+        }
+      }
+
+      res.json({ created, errors, total: data.length - 1 });
+    } catch (error: any) {
+      console.error("Error importing RAIDD entries:", error);
+      res.status(500).json({ message: error.message || "Failed to import RAIDD entries" });
+    }
+  });
+
+  // ============================================================================
+  // PROJECT DELIVERABLES
+  // ============================================================================
+
+  app.get("/api/projects/:projectId/deliverables", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const deliverables = await storage.getProjectDeliverables(req.params.projectId);
+      res.json(deliverables);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch deliverables" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/deliverables", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const deliverable = await storage.createProjectDeliverable({
+        ...req.body,
+        tenantId: project.tenantId || tenantId,
+        projectId: req.params.projectId,
+        createdBy: req.user?.id || null,
+      });
+      res.status(201).json(deliverable);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to create deliverable" });
+    }
+  });
+
+  app.patch("/api/projects/:projectId/deliverables/:deliverableId", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const existing = await storage.getProjectDeliverable(req.params.deliverableId);
+      if (!existing || existing.projectId !== req.params.projectId) {
+        return res.status(404).json({ message: "Deliverable not found" });
+      }
+      const updated = await storage.updateProjectDeliverable(req.params.deliverableId, {
+        ...req.body,
+        createdBy: req.user?.id || null,
+      });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to update deliverable" });
+    }
+  });
+
+  app.delete("/api/projects/:projectId/deliverables/:deliverableId", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const existing = await storage.getProjectDeliverable(req.params.deliverableId);
+      if (!existing || existing.projectId !== req.params.projectId) {
+        return res.status(404).json({ message: "Deliverable not found" });
+      }
+      await storage.deleteProjectDeliverable(req.params.deliverableId);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to delete deliverable" });
+    }
+  });
+
+  app.get("/api/projects/:projectId/deliverables/:deliverableId/history", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const history = await storage.getDeliverableStatusHistory(req.params.deliverableId);
+      res.json(history);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch deliverable history" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/deliverables/ai-extract", requireAuth, async (req, res) => {
+    try {
+      const { narrative } = req.body;
+      if (!narrative || typeof narrative !== 'string') {
+        return res.status(400).json({ message: "Narrative text is required" });
+      }
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const existingDeliverables = await storage.getProjectDeliverables(req.params.projectId);
+      const existingNames = existingDeliverables.map(d => d.name.toLowerCase());
+
+      const systemPrompt = `You are a project delivery expert. Analyze the provided project narrative or proposal text and extract all concrete deliverables — tangible outputs, documents, reports, or work products that will be produced during the engagement.
+
+For each deliverable, provide:
+- name: A clear, concise name (e.g., "Current-State Workflow Maps", "Governance Charter Deck")
+- description: A brief description of what this deliverable includes
+- suggestedPhase: Which phase or epic this belongs to (if identifiable)
+
+Rules:
+- Only extract concrete, tangible deliverables — not activities or tasks
+- A deliverable is something that gets "delivered" to the client (a document, report, plan, framework, presentation, etc.)
+- Do not include meetings, workshops, or interviews as deliverables — those are activities
+- Be specific: "Discovery Findings Report" not just "Report"
+- If the narrative mentions phases, associate each deliverable with its phase
+
+Return valid JSON in this exact format:
+{
+  "deliverables": [
+    {
+      "name": "Deliverable Name",
+      "description": "What this deliverable includes and its purpose",
+      "suggestedPhase": "Phase name or null"
+    }
+  ]
+}`;
+
+      const existingNote = existingNames.length > 0
+        ? `\n\nThe following deliverables already exist for this project (do NOT include these again):\n${existingNames.map(n => `- ${n}`).join('\n')}`
+        : '';
+
+      const trimmedNarrative = narrative.length > 30000 ? narrative.substring(0, 30000) + '\n\n[... remainder truncated for length]' : narrative;
+
+      const userMessage = `Analyze this project narrative and extract all concrete deliverables:
+
+${trimmedNarrative}${existingNote}`;
+
+      const { aiService } = await import('../services/ai-service.js');
+      const delTenantId = (req.user as any)?.tenantId;
+      const result = await aiService.customPrompt(systemPrompt, userMessage, {
+        responseFormat: 'json',
+        maxTokens: 4096,
+        usageCtx: { tenantId: delTenantId, userId: (req.user as any)?.id, feature: 'deliverable_extraction' as any },
+      });
+
+      const parsed = JSON.parse(result.content);
+      const candidates = (parsed.deliverables || []).map((d: any) => ({
+        ...d,
+        isNew: !existingNames.includes(d.name.toLowerCase()),
+      }));
+
+      res.json({ candidates });
+    } catch (error: any) {
+      console.error("AI deliverable extraction error:", error);
+      res.status(500).json({ message: error.message || "Failed to extract deliverables" });
+    }
+  });
+
+  // Bulk create deliverables (used after AI extraction)
+  app.post("/api/projects/:projectId/deliverables/bulk", requireAuth, async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = req.user?.tenantId;
+      if (tenantId && project.tenantId && project.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const { deliverables } = req.body;
+      if (!Array.isArray(deliverables) || deliverables.length === 0) {
+        return res.status(400).json({ message: "Deliverables array is required" });
+      }
+      const created = [];
+      for (let i = 0; i < deliverables.length; i++) {
+        const d = deliverables[i];
+        const result = await storage.createProjectDeliverable({
+          tenantId: project.tenantId || tenantId!,
+          projectId: req.params.projectId,
+          name: d.name,
+          description: d.description || null,
+          ownerUserId: d.ownerUserId,
+          epicId: d.epicId || null,
+          stageId: d.stageId || null,
+          status: 'not-started',
+          targetDate: d.targetDate || null,
+          sortOrder: i,
+          createdBy: req.user?.id || null,
+        });
+        created.push(result);
+      }
+      res.status(201).json({ created: created.length, deliverables: created });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to bulk create deliverables" });
+    }
+  });
+
+  // ============================================================================
+  // ============================================================================
+  // RAIDD AI FEATURES
+  // ============================================================================
+
+  app.post("/api/raidd/ai/suggest-mitigation", requireAuth, requireRole(["admin", "pm", "employee"]), async (req, res) => {
+    try {
+      const { title, description, type, impact, likelihood, projectContext } = req.body;
+      if (!title) {
+        return res.status(400).json({ message: "Title is required" });
+      }
+
+      const { aiService, buildGroundingContext } = await import("../services/ai-service.js");
+      if (!aiService.isConfigured()) {
+        return res.status(503).json({ message: "AI service not configured" });
+      }
+
+      const tenantId = (req.user as any)?.tenantId;
+      const groundingDocs = tenantId
+        ? await storage.getActiveGroundingDocumentsForTenant(tenantId)
+        : await storage.getActiveGroundingDocuments();
+      const groundingCtx = buildGroundingContext(groundingDocs, 'general');
+
+      const itemType = type || 'risk';
+      const systemPrompt = `You are a consulting project management expert specializing in RAIDD (Risks, Actions, Issues, Decisions, Dependencies) governance. Provide actionable, specific suggestions tailored to consulting projects.`;
+
+      let userMessage = '';
+      if (itemType === 'risk') {
+        userMessage = `Suggest a detailed mitigation plan for this project risk:
+
+Title: ${title}
+${description ? `Description: ${description}` : ''}
+${impact ? `Impact: ${impact}` : ''}
+${likelihood ? `Likelihood: ${likelihood}` : ''}
+${projectContext ? `Project Context: ${projectContext}` : ''}
+
+Provide a JSON response with:
+{
+  "mitigationPlan": "Detailed step-by-step mitigation strategy",
+  "suggestedActions": [
+    { "title": "Action item title", "description": "What needs to be done", "priority": "high|medium|low" }
+  ],
+  "residualRisk": "Description of remaining risk after mitigation"
+}`;
+      } else if (itemType === 'issue') {
+        userMessage = `Suggest a resolution plan for this project issue:
+
+Title: ${title}
+${description ? `Description: ${description}` : ''}
+${impact ? `Impact: ${impact}` : ''}
+${projectContext ? `Project Context: ${projectContext}` : ''}
+
+Provide a JSON response with:
+{
+  "resolutionNotes": "Detailed resolution approach",
+  "suggestedActions": [
+    { "title": "Action item title", "description": "What needs to be done", "priority": "high|medium|low" }
+  ],
+  "preventionMeasures": "Steps to prevent recurrence"
+}`;
+      } else {
+        return res.status(400).json({ message: "AI suggestions are available for risks and issues" });
+      }
+
+      const raTenantId = (req.user as any)?.tenantId;
+      const result = await aiService.customPrompt(systemPrompt, userMessage, {
+        temperature: 0.6,
+        maxTokens: 8192,
+        responseFormat: 'json',
+        groundingContext: groundingCtx,
+        usageCtx: { tenantId: raTenantId, userId: (req.user as any)?.id, feature: 'raidd_analysis' as any },
+      });
+
+      if (!result.content || result.content.trim().length === 0) {
+        return res.status(422).json({ message: "AI returned an empty response. Try again." });
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(result.content);
+      } catch {
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try { parsed = JSON.parse(jsonMatch[0]); } catch { parsed = { mitigationPlan: result.content, suggestedActions: [] }; }
+        } else {
+          parsed = { mitigationPlan: result.content, suggestedActions: [] };
+        }
+      }
+
+      res.json(parsed);
+    } catch (error: any) {
+      console.error("[AI] Suggest mitigation/resolution failed:", error);
+      if (error.message?.includes('finish_reason') || error.message?.includes('length')) {
+        return res.status(422).json({ message: "The input was too long for AI to process. Try with less context." });
+      }
+      res.status(500).json({ message: error.message || "Failed to generate suggestion" });
+    }
+  });
+
+  app.post("/api/raidd/ai/ingest-text", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+    try {
+      const { text, projectContext } = req.body;
+      if (!text) {
+        return res.status(400).json({ message: "Text content is required" });
+      }
+
+      const { aiService, buildGroundingContext } = await import("../services/ai-service.js");
+      if (!aiService.isConfigured()) {
+        return res.status(503).json({ message: "AI service not configured" });
+      }
+
+      const tenantId = (req.user as any)?.tenantId;
+      const groundingDocs = tenantId
+        ? await storage.getActiveGroundingDocumentsForTenant(tenantId)
+        : await storage.getActiveGroundingDocuments();
+      const groundingCtx = buildGroundingContext(groundingDocs, 'general');
+
+      const systemPrompt = `You are a consulting project management expert. Analyze the given text and extract any risks, issues, decisions, dependencies, or action items (RAIDD items). Categorize each item accurately and provide structured output.`;
+
+      const userMessage = `Analyze this text and extract all RAIDD items (risks, issues, decisions, dependencies, action items):
+
+${text}
+${projectContext ? `\nProject Context: ${projectContext}` : ''}
+
+Return a JSON array of items:
+{
+  "items": [
+    {
+      "type": "risk|issue|decision|dependency|action_item",
+      "title": "Clear, concise title",
+      "description": "Detailed description",
+      "priority": "critical|high|medium|low",
+      "impact": "critical|high|medium|low",
+      "likelihood": "almost_certain|likely|possible|unlikely|rare",
+      "category": "Optional category like Technical, Legal, Resource, etc.",
+      "mitigationPlan": "For risks: suggested mitigation",
+      "resolutionNotes": "For issues: suggested resolution",
+      "suggestedOwnerRole": "Suggested role for the owner (e.g., Project Manager, Tech Lead)"
+    }
+  ]
+}
+
+Only include fields relevant to each item type. Be specific and actionable.`;
+
+      const result = await aiService.customPrompt(systemPrompt, userMessage, {
+        temperature: 0.5,
+        maxTokens: 8192,
+        responseFormat: 'json',
+        groundingContext: groundingCtx,
+        usageCtx: { tenantId, userId: (req.user as any)?.id, feature: 'raidd_analysis' as any },
+      });
+
+      if (!result.content || result.content.trim().length === 0) {
+        return res.status(422).json({ message: "AI returned an empty response. Try with shorter text or try again." });
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(result.content);
+      } catch {
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try { parsed = JSON.parse(jsonMatch[0]); } catch { parsed = { items: [] }; }
+        } else {
+          parsed = { items: [] };
+        }
+      }
+
+      res.json(parsed);
+    } catch (error: any) {
+      console.error("[AI] Ingest text failed:", error);
+      if (error.message?.includes('finish_reason') || error.message?.includes('length')) {
+        return res.status(422).json({ message: "The text was too long for AI to process completely. Try splitting it into smaller sections." });
+      }
+      res.status(500).json({ message: error.message || "Failed to analyze text" });
+    }
+  });
+
+  app.post("/api/raidd/ai/extract-decisions", requireAuth, requireRole(["admin", "pm"]), async (req, res) => {
+    try {
+      const { text, projectContext } = req.body;
+      if (!text) {
+        return res.status(400).json({ message: "Text content is required" });
+      }
+
+      const { aiService, buildGroundingContext } = await import("../services/ai-service.js");
+      if (!aiService.isConfigured()) {
+        return res.status(503).json({ message: "AI service not configured" });
+      }
+
+      const tenantId = (req.user as any)?.tenantId;
+      const groundingDocs = tenantId
+        ? await storage.getActiveGroundingDocumentsForTenant(tenantId)
+        : await storage.getActiveGroundingDocuments();
+      const groundingCtx = buildGroundingContext(groundingDocs, 'general');
+
+      const systemPrompt = `You are a consulting project management expert. Analyze the provided document text and identify all decisions that need to be made, have been made, or are implied. Focus on identifying both explicit decisions and implicit decisions that should be formally captured.`;
+
+      const userMessage = `Analyze this document and extract all decisions (made, pending, or implied):
+
+${text}
+${projectContext ? `\nProject Context: ${projectContext}` : ''}
+
+Return a JSON response:
+{
+  "decisions": [
+    {
+      "title": "Clear decision title",
+      "description": "What the decision is about and any context",
+      "status": "open",
+      "priority": "critical|high|medium|low",
+      "category": "Optional category like Architecture, Process, Staffing, Budget, etc.",
+      "suggestedOwnerRole": "Who should own this decision",
+      "rationale": "Any reasoning or context from the document"
+    }
+  ]
+}
+
+Extract decisions broadly — look for statements about choices, directions, agreements, approvals, trade-offs, and pending questions that need resolution.`;
+
+      const result = await aiService.customPrompt(systemPrompt, userMessage, {
+        temperature: 0.5,
+        maxTokens: 8192,
+        responseFormat: 'json',
+        groundingContext: groundingCtx,
+        usageCtx: { tenantId, userId: (req.user as any)?.id, feature: 'raidd_analysis' as any },
+      });
+
+      if (!result.content || result.content.trim().length === 0) {
+        return res.status(422).json({ message: "AI returned an empty response. Try with shorter text or try again." });
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(result.content);
+      } catch {
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try { parsed = JSON.parse(jsonMatch[0]); } catch { parsed = { decisions: [] }; }
+        } else {
+          parsed = { decisions: [] };
+        }
+      }
+
+      res.json(parsed);
+    } catch (error: any) {
+      console.error("[AI] Extract decisions failed:", error);
+      if (error.message?.includes('finish_reason') || error.message?.includes('length')) {
+        return res.status(422).json({ message: "The text was too long for AI to process completely. Try splitting it into smaller sections." });
+      }
+      res.status(500).json({ message: error.message || "Failed to extract decisions" });
+    }
+  });
+
+  app.post("/api/raidd/ai/suggest-actions", requireAuth, requireRole(["admin", "pm", "employee"]), async (req, res) => {
+    try {
+      const { title, description, type, projectContext, teamMembers } = req.body;
+      if (!title) {
+        return res.status(400).json({ message: "Title is required" });
+      }
+
+      const { aiService, buildGroundingContext } = await import("../services/ai-service.js");
+      if (!aiService.isConfigured()) {
+        return res.status(503).json({ message: "AI service not configured" });
+      }
+
+      const tenantId = (req.user as any)?.tenantId;
+      const groundingDocs = tenantId
+        ? await storage.getActiveGroundingDocumentsForTenant(tenantId)
+        : await storage.getActiveGroundingDocuments();
+      const groundingCtx = buildGroundingContext(groundingDocs, 'general');
+
+      const teamContext = teamMembers && teamMembers.length > 0
+        ? `\nAvailable team members: ${teamMembers.map((m: any) => m.name).join(', ')}`
+        : '';
+
+      const systemPrompt = `You are a consulting project management expert. Suggest specific, actionable action items that should be created to address the given RAIDD item. Consider the team composition when suggesting assignments.`;
+
+      const userMessage = `Suggest action items for this ${type || 'item'}:
+
+Title: ${title}
+${description ? `Description: ${description}` : ''}
+${projectContext ? `Project Context: ${projectContext}` : ''}${teamContext}
+
+Return a JSON response:
+{
+  "actions": [
+    {
+      "title": "Specific action item title",
+      "description": "What needs to be done in detail",
+      "priority": "critical|high|medium|low",
+      "suggestedAssignee": "Name of suggested team member (if team provided) or role",
+      "estimatedDays": 3
+    }
+  ]
+}`;
+
+      const result = await aiService.customPrompt(systemPrompt, userMessage, {
+        temperature: 0.6,
+        maxTokens: 8192,
+        responseFormat: 'json',
+        groundingContext: groundingCtx,
+        usageCtx: { tenantId, userId: (req.user as any)?.id, feature: 'raidd_analysis' as any },
+      });
+
+      if (!result.content || result.content.trim().length === 0) {
+        return res.status(422).json({ message: "AI returned an empty response. Try again." });
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(result.content);
+      } catch {
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try { parsed = JSON.parse(jsonMatch[0]); } catch { parsed = { actions: [] }; }
+        } else {
+          parsed = { actions: [] };
+        }
+      }
+
+      res.json(parsed);
+    } catch (error: any) {
+      console.error("[AI] Suggest actions failed:", error);
+      res.status(500).json({ message: error.message || "Failed to suggest actions" });
+    }
+  });
 }
