@@ -8,8 +8,8 @@ packages = ["alsa-lib", "at-spi2-atk", "at-spi2-core", "atk", "cairo", "chromium
 
 [deployment]
 run = ["sh", "-c", "npm start"]
-deploymentTarget = "cloudrun"
-build = ["sh", "-c", "npm run build"]
+deploymentTarget = "autoscale"
+build = ["sh", "-c", "npm run build && npx tsx scripts/validate-agent-card.ts"]
 publicDir = "dist/public"
 
 [[ports]]
@@ -119,6 +119,10 @@ author = "agent"
 task = "workflow.run"
 args = "Start application"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "agent-card-sync"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -131,6 +135,17 @@ waitForPort = 5000
 [workflows.workflow.metadata]
 outputType = "webview"
 
+[[workflows.workflow]]
+name = "agent-card-sync"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx scripts/gen-agent-card.ts --check && npx tsx scripts/validate-agent-card.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
 [agent]
 integrations = ["javascript_object_storage:1.0.0", "outlook:1.0.0", "sharepoint:1.0.0", "javascript_openai_ai_integrations:1.0.0", "sendgrid:1.0.0", "hubspot:1.0.0"]
 expertMode = true
@@ -140,6 +155,7 @@ expertMode = true
 [userenv.production]
 AZURE_CERTIFICATE_THUMBPRINT = "C9C587A1C4FC823872007C45EE6A001DCF1AFE68"
 AZURE_REDIRECT_URI = "https://constellation.synozur.com/api/auth/callback"
+BASE_URL = "https://constellation.synozur.com"
 
 [userenv.development]
 AZURE_REDIRECT_URI = "https://fe536eef-aa4a-4f38-9444-a53b449002d7-00-2w4rayqj9t1dp.spock.replit.dev/api/auth/callback"

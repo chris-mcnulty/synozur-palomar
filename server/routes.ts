@@ -25,6 +25,7 @@ import { registerHubSpotRoutes } from "./routes/hubspot.js";
 import { registerTenantStorageRoutes } from "./routes/tenant-storage.js";
 import { registerMcpRoutes } from "./routes/mcp.js";
 import { registerMcpWriteRoutes } from "./routes/mcp-write.js";
+import { registerA2ARoutes } from "./routes/a2a.js";
 import { registerTeamsAppRoutes } from "./routes/teams-app.js";
 import { createHubSpotDealNote, createHubSpotCompanyNote, getLinkedHubSpotCompanyId, isHubSpotConnected } from "./services/hubspot-client.js";
 import { invalidateProviderCache, ReplitAIProvider, AzureFoundryProvider } from "./services/ai-provider.js";
@@ -40,6 +41,7 @@ import { registerAiRoutes } from "./routes/ai.js";
 import { registerRaiddRoutes } from "./routes/raidd.js";
 import { registerResourcePlanningRoutes } from "./routes/resource-planning.js";
 import { registerSupportRoutes } from "./routes/support.js";
+import { registerCopilotStudioRoutes } from "./routes/copilot-studio.js";
 
 // Initialize SharePoint storage with database access
 initSharePointStorage(storage);
@@ -330,12 +332,23 @@ export async function registerRoutes(app: Express): Promise<void> {
     requireRole,
   });
 
+  registerCopilotStudioRoutes(app, {
+    requireAuth,
+    requireRole,
+  });
+
   // MCP v1 write endpoints — Copilot agent write activities (gated by
   // MCP_WRITES_ENABLED feature flag). See docs/MCP_CONNECTOR_SETUP.md.
   registerMcpWriteRoutes(app, {
     requireAuth,
     requireRole,
   });
+
+  // A2A task lifecycle endpoints — full agent-to-agent protocol support.
+  // POST /a2a/tasks/send  — accept A2A Message, dispatch tool, return Task
+  // GET  /a2a/tasks/get   — retrieve stored task by id
+  // Auth: Bearer (Azure AD JWT) via mcpBearerAuth (same as MCP endpoints).
+  registerA2ARoutes(app);
 
   registerTeamsAppRoutes(app, {
     requireAuth,
@@ -526,6 +539,40 @@ export async function registerRoutes(app: Express): Promise<void> {
     registerSupportRoutes(app, { requireAuth, requireRole });
     registerResourcePlanningRoutes(app, { requireAuth, requireRole });
   
+
+  // Agent card health check (admin only)
+  app.get("/api/admin/agent-card-health", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const { getLastHealthCheckResult } = await import('./services/agent-card-health-scheduler.js');
+      const result = getLastHealthCheckResult();
+      res.json({ result });
+    } catch (error) {
+      console.error("[ADMIN] Error fetching agent card health result:", error);
+      res.status(500).json({ message: "Failed to fetch agent card health status" });
+    }
+  });
+
+  app.post("/api/admin/agent-card-health/run", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const { runAgentCardHealthCheck } = await import('./services/agent-card-health-scheduler.js');
+      const result = await runAgentCardHealthCheck('manual');
+      res.json({ result });
+    } catch (error) {
+      console.error("[ADMIN] Error running agent card health check:", error);
+      res.status(500).json({ message: "Failed to run agent card health check" });
+    }
+  });
+
+  app.get("/api/admin/agent-card-health/history", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
+      const history = await storage.getAgentCardHealthHistory(limit);
+      res.json({ history });
+    } catch (error) {
+      console.error("[ADMIN] Error fetching agent card health history:", error);
+      res.status(500).json({ message: "Failed to fetch agent card health history" });
+    }
+  });
 
   // System Settings (read: admin, write: platform admin only)
   app.get("/api/settings", requireAuth, requireRole(["admin"]), async (req, res) => {

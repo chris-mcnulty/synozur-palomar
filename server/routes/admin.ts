@@ -3,6 +3,7 @@ import * as fsNode from "fs";
 import * as pathNode from "path";
 import { z } from "zod";
 import { storage, db } from "../storage";
+import { runAgentCardHealthCheck, getLastHealthCheckResult, getLastAgentCardHealthResult, getAgentCardHealthHistory, getSchedulerIntervalHours } from "../services/agent-card-health-scheduler.js";
 import { insertSystemSettingSchema, insertGroundingDocumentSchema, groundingDocCategoryEnum, GROUNDING_DOC_CATEGORY_LABELS, insertSupportTicketSchema, TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES, vocabularyTermsSchema, updateOrganizationVocabularySchema, insertAiConfigurationSchema, users, projects, clients, tenants, tenantUsers, airportCodes, timeEntries, pageViews, supportTickets, supportTicketReplies, supportTicketPlannerSync, groundingDocuments, aiConfiguration, aiUsageLogs, aiUsageSummaries, aiUsageAlerts } from "@shared/schema";
 import { eq, sql, inArray, max, and, gte, desc, or } from "drizzle-orm";
 import { emailService } from "../services/email-notification.js";
@@ -2235,6 +2236,124 @@ export function registerAdminRoutes(app: Express, deps: AdminRouteDeps) {
     } catch (error: any) {
       console.error("[ANALYTICS] pageviews summary failed:", error);
       res.status(500).json({ message: "Failed to fetch pageviews" });
+    }
+  });
+
+  // GET /api/admin/agent-card-health — returns the last cached health check result, history, and scheduler config
+  app.get("/api/admin/agent-card-health", requireAuth, requirePlatformAdmin, async (_req, res) => {
+    const last = getLastAgentCardHealthResult();
+    const intervalHours = getSchedulerIntervalHours();
+    const retentionDays = parseInt(
+      await storage.getSystemSettingValue('AGENT_CARD_HEALTH_RETENTION_DAYS', '90'),
+      10
+    ) || 90;
+    let dbHistory: any[] = [];
+    try {
+      dbHistory = await storage.getAgentCardHealthChecks(200);
+    } catch (err) {
+      console.error("[AGENT-CARD-HEALTH] Failed to load history from DB:", err);
+    }
+    return res.json({ result: last ?? null, history: dbHistory, intervalHours, retentionDays });
+  });
+
+  // POST /api/admin/agent-card-health/check — triggers a fresh health check on demand
+  app.post("/api/admin/agent-card-health/check", requireAuth, requirePlatformAdmin, async (_req, res) => {
+    try {
+      const result = await runAgentCardHealthCheck('admin-manual');
+      return res.json({ result });
+    } catch (error: any) {
+      console.error("[AGENT-CARD-HEALTH] Manual check failed:", error);
+      return res.status(500).json({ message: "Health check failed", error: error?.message });
+    }
+  });
+
+  // ─── Teams Proactive Alerts ───────────────────────────────────────────────
+
+  const channelTargetSchema = z.object({
+    teamId: z.string().min(1),
+    channelId: z.string().min(1),
+  });
+
+  const teamsAlertSettingsSchema = z.object({
+    teamsAlertsEnabled: z.boolean().optional(),
+    teamsAlertOnHealthChange: z.boolean().optional(),
+    teamsAlertOnRaiddOverdue: z.boolean().optional(),
+    teamsAlertOnStatusReportDue: z.boolean().optional(),
+    teamsNotificationChannels: z.object({
+      default: channelTargetSchema.nullable().optional(),
+      health: channelTargetSchema.nullable().optional(),
+      raidd: channelTargetSchema.nullable().optional(),
+      statusReport: channelTargetSchema.nullable().optional(),
+    }).optional(),
+  });
+
+  app.get("/api/admin/teams-alerts/settings", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenantId;
+      if (!tenantId) return res.status(403).json({ message: "Tenant context required" });
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+      res.json({
+        teamsAlertsEnabled: tenant.teamsAlertsEnabled ?? false,
+        teamsAlertOnHealthChange: tenant.teamsAlertOnHealthChange ?? true,
+        teamsAlertOnRaiddOverdue: tenant.teamsAlertOnRaiddOverdue ?? true,
+        teamsAlertOnStatusReportDue: tenant.teamsAlertOnStatusReportDue ?? true,
+        teamsNotificationChannels: (tenant as any).teamsNotificationChannels ?? null,
+      });
+    } catch (error: any) {
+      console.error("[TEAMS-ALERT] GET settings failed:", error);
+      res.status(500).json({ message: "Failed to retrieve Teams alert settings" });
+    }
+  });
+
+  app.patch("/api/admin/teams-alerts/settings", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenantId;
+      if (!tenantId) return res.status(403).json({ message: "Tenant context required" });
+
+      const parsed = teamsAlertSettingsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid settings", errors: parsed.error.errors });
+      }
+
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+      const updated = await storage.updateTenant(tenantId, parsed.data as any);
+
+      res.json({
+        teamsAlertsEnabled: updated.teamsAlertsEnabled ?? false,
+        teamsAlertOnHealthChange: updated.teamsAlertOnHealthChange ?? true,
+        teamsAlertOnRaiddOverdue: updated.teamsAlertOnRaiddOverdue ?? true,
+        teamsAlertOnStatusReportDue: updated.teamsAlertOnStatusReportDue ?? true,
+        teamsNotificationChannels: (updated as any).teamsNotificationChannels ?? null,
+      });
+    } catch (error: any) {
+      console.error("[TEAMS-ALERT] PATCH settings failed:", error);
+      res.status(500).json({ message: "Failed to update Teams alert settings" });
+    }
+  });
+
+  app.post("/api/admin/teams-alerts/run", requireAuth, requireRole(["admin"]), async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenantId;
+      if (!tenantId) return res.status(403).json({ message: "Tenant context required" });
+
+      const { runTeamsAlertsForTenant } = await import('../services/teams-alert-service.js');
+      const result = await runTeamsAlertsForTenant(tenantId);
+
+      res.json({
+        success: true,
+        sent: result.sent,
+        failed: result.failed,
+        skipped: result.skipped,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("[TEAMS-ALERT] Manual run failed:", error);
+      res.status(500).json({ message: "Failed to run Teams alerts" });
     }
   });
 }

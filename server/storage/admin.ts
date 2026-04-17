@@ -54,7 +54,10 @@ import {
   type InsertAiUsageLog,
   aiUsageAlerts,
   type AiUsageAlert,
-  type InsertAiUsageAlert
+  type InsertAiUsageAlert,
+  agentCardHealthChecks,
+  type AgentCardHealthCheck,
+  type InsertAgentCardHealthCheck,
 } from "@shared/schema";
 import { db } from "../db";
 import type { IStorage } from "./index";
@@ -1217,5 +1220,25 @@ export const adminMethods: ThisType<IStorage & {
     return db.select().from(aiUsageAlerts)
       .orderBy(desc(aiUsageAlerts.alertedAt))
       .limit(50);
-  }
+  },
+
+  async saveAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck> {
+    const [created] = await db.insert(agentCardHealthChecks).values(result).returning();
+    return created;
+  },
+
+  async getAgentCardHealthChecks(limit: number = 50): Promise<AgentCardHealthCheck[]> {
+    return db.select()
+      .from(agentCardHealthChecks)
+      .orderBy(desc(agentCardHealthChecks.checkedAt))
+      .limit(limit);
+  },
+
+  async pruneAgentCardHealthHistory(olderThanDays: number): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+    const result = await db.delete(agentCardHealthChecks)
+      .where(lte(agentCardHealthChecks.checkedAt, cutoff))
+      .returning({ id: agentCardHealthChecks.id });
+    return result.length;
+  },
 };
