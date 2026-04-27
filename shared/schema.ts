@@ -3361,6 +3361,7 @@ export const AI_FEATURES = {
   RAIDD_ANALYSIS: 'raidd_analysis',
   SUB_SOW_NARRATIVE: 'sub_sow_narrative',
   EXECUTIVE_NARRATIVE: 'executive_narrative',
+  TIME_ENTRY_REWRITE: 'time_entry_rewrite',
   CUSTOM: 'custom',
   OTHER: 'other',
 } as const;
@@ -3746,7 +3747,7 @@ export const agentCardHealthChecks = pgTable("agent_card_health_checks", {
   status: varchar("status", { length: 20 }).notNull(), // 'ok' | 'invalid' | 'error'
   checkedAt: timestamp("checked_at").notNull(),
   skillCount: integer("skill_count"),
-  errors: text("errors").array(),
+  errors: jsonb("errors").$type<string[]>(),
   message: text("message"),
   trigger: varchar("trigger", { length: 50 }).notNull().default("scheduled"), // 'scheduled' | 'startup' | 'admin-manual' | 'cron'
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
