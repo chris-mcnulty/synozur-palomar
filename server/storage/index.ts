@@ -551,7 +551,9 @@ export interface IStorage {
   updateProjectEpic(id: string, update: Partial<InsertProjectEpic>): Promise<ProjectEpic>;
   deleteProjectEpic(id: string): Promise<void>;
   getProjectMilestones(projectId: string): Promise<ProjectMilestone[]>;
+  getProjectMilestone(id: string): Promise<ProjectMilestone | undefined>;
   getProjectMilestonesByProjectIds(projectIds: string[]): Promise<Map<string, ProjectMilestone[]>>;
+  getProjectMilestoneById(id: string): Promise<ProjectMilestone | undefined>;
   createProjectMilestone(milestone: InsertProjectMilestone): Promise<ProjectMilestone>;
   updateProjectMilestone(id: string, update: Partial<InsertProjectMilestone>): Promise<ProjectMilestone>;
   deleteProjectMilestone(id: string): Promise<void>;
@@ -976,6 +978,11 @@ export interface IStorage {
   createStatusReport(data: InsertStatusReport): Promise<StatusReport>;
   updateStatusReport(id: string, updates: Partial<InsertStatusReport>): Promise<StatusReport>;
   deleteStatusReport(id: string): Promise<void>;
+  checkStatusReportDataQuality(projectId: string, startDate: string, endDate: string, tenantId?: string | null): Promise<{
+    categories: Array<{ key: string; label: string; status: "good" | "warning" | "missing"; message: string; detail?: string; count?: number }>;
+    warnings: string[];
+    overallStatus: "good" | "warning" | "missing";
+  }>;
 
   // AI Configuration & Usage
   getAiConfiguration(): Promise<AiConfiguration | undefined>;

@@ -71,6 +71,7 @@ import { ProjectRetainerManagement } from "@/components/ProjectRetainerManagemen
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Tooltip as UITooltip, TooltipContent as UITooltipContent, TooltipProvider as UITooltipProvider, TooltipTrigger as UITooltipTrigger } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -108,7 +109,7 @@ import {
   DollarSign, Users, User, Calendar, CheckCircle, AlertCircle, Activity,
   Target, Zap, Briefcase, FileText, Plus, Edit, Trash2, ExternalLink,
   Check, X, FileCheck, Lock, Filter, Download, Upload, Pencil, FolderOpen, Building, UserPlus, Sparkles, Bookmark,
-  Link2, Search, Loader2, Globe
+  Link2, Search, Loader2, Globe, Info
 } from "lucide-react";
 import { MicrosoftTeamsIcon } from "@/components/icons/microsoft-icons";
 import { TimeEntryManagementDialog } from "@/components/time-entry-management-dialog";
@@ -201,8 +202,10 @@ const milestoneFormSchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   budgetHours: z.string().optional(),
+  amount: z.string().optional(),
   status: z.enum(["not-started", "in-progress", "completed"]),
   projectEpicId: z.string().optional(),
+  isPaymentMilestone: z.boolean().default(false),
   order: z.number().int().default(0)
 });
 
@@ -1018,6 +1021,30 @@ export default function ProjectDetail() {
     roleInstanceLabel?: string;
     matchingCount: number;
   } | null>(null);
+  const [showCascadeDialog, setShowCascadeDialog] = useState(false);
+  const [cascadePreviewData, setCascadePreviewData] = useState<{
+    deltaDays: number;
+    affectedCount: number;
+    allocations: {
+      id: string;
+      personName: string | null;
+      roleName: string | null;
+      roleInstanceLabel: string | null;
+      plannedStartDate: string | null;
+      plannedEndDate: string | null;
+      newPlannedStartDate: string | null;
+      newPlannedEndDate: string | null;
+    }[];
+  } | null>(null);
+  const [pendingMilestoneUpdate, setPendingMilestoneUpdate] = useState<{
+    milestoneId: string;
+    data: MilestoneFormData;
+    processedData: Record<string, unknown>;
+    newEndDate: string;
+    newStartDate?: string;
+  } | null>(null);
+  const [showBulkAssignRolesDialog, setShowBulkAssignRolesDialog] = useState(false);
+  const [bulkAssignSelections, setBulkAssignSelections] = useState<Record<string, string>>({});
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [suggestionsAllocationId, setSuggestionsAllocationId] = useState<string | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -1046,6 +1073,13 @@ export default function ProjectDetail() {
   const [allocationStatusFilter, setAllocationStatusFilter] = useState<string>('all');
   const [allocationResourceFilter, setAllocationResourceFilter] = useState<string>('all');
   const [allocationStageFilter, setAllocationStageFilter] = useState<string>('all');
+  const [allocationAssignedFilter, setAllocationAssignedFilter] = useState<string>('all');
+  const [allocationSearchQuery, setAllocationSearchQuery] = useState<string>('');
+  // Fill Role Slots dialog state
+  const [showFillRoleSlotsDialog, setShowFillRoleSlotsDialog] = useState(false);
+  const [fillRoleSlotsRoleId, setFillRoleSlotsRoleId] = useState<string | null>(null);
+  const [fillRoleSlotSelections, setFillRoleSlotSelections] = useState<Record<string, { personId: string; label: string }>>({});
+  const [fillRoleSlotsReassignPersonId, setFillRoleSlotsReassignPersonId] = useState<string>('');
   const [selectedTimeEntry, setSelectedTimeEntry] = useState<any>(null);
   const [timeEntryDialogOpen, setTimeEntryDialogOpen] = useState(false);
   const [timeEntryToDelete, setTimeEntryToDelete] = useState<any>(null);
@@ -1120,6 +1154,19 @@ export default function ProjectDetail() {
     retry: false,
   });
   const hasLinkedChannel = !!projectChannel;
+
+  // Hours summary — authoritative budgeted vs actual vs remaining from estimateLineItems + timeEntries
+  const { data: hoursSummary } = useQuery<{
+    budgetedHours: number;
+    actualHours: number;
+    remainingHours: number;
+    hoursVariance: number;
+    hoursConsumedPct: number;
+  }>({
+    queryKey: ['/api/projects', id, 'hours-summary'],
+    enabled: !!id,
+    staleTime: 2 * 60 * 1000,
+  });
 
   // Auto-open edit dialog when ?edit=true is in the URL
   useEffect(() => {
@@ -1679,11 +1726,13 @@ export default function ProjectDetail() {
     mutationFn: async (data: MilestoneFormData) => {
       const processedData = {
         ...data,
-        budgetHours: data.budgetHours ? parseFloat(data.budgetHours) : null,
+        budgetHours: !data.isPaymentMilestone && data.budgetHours ? parseFloat(data.budgetHours) : null,
+        amount: data.isPaymentMilestone && data.amount ? data.amount : null,
         projectEpicId: data.projectEpicId || null,
         startDate: data.startDate || null,
         endDate: data.endDate || null,
-        description: data.description || null
+        description: data.description || null,
+        isPaymentMilestone: data.isPaymentMilestone ?? false,
       };
       return apiRequest(`/api/projects/${id}/milestones`, {
         method: "POST",
@@ -1712,11 +1761,13 @@ export default function ProjectDetail() {
     mutationFn: async ({ id: milestoneId, data }: { id: string; data: MilestoneFormData }) => {
       const processedData = {
         ...data,
-        budgetHours: data.budgetHours ? parseFloat(data.budgetHours) : null,
+        budgetHours: !data.isPaymentMilestone && data.budgetHours ? parseFloat(data.budgetHours) : null,
+        amount: data.isPaymentMilestone && data.amount ? data.amount : null,
         projectEpicId: data.projectEpicId || null,
         startDate: data.startDate || null,
         endDate: data.endDate || null,
-        description: data.description || null
+        description: data.description || null,
+        isPaymentMilestone: data.isPaymentMilestone ?? false,
       };
       return apiRequest(`/api/milestones/${milestoneId}`, {
         method: "PATCH",
@@ -1742,6 +1793,76 @@ export default function ProjectDetail() {
     }
   });
 
+  const cascadePreviewMutation = useMutation({
+    mutationFn: async ({ milestoneId, newEndDate, newStartDate }: { milestoneId: string; newEndDate?: string; newStartDate?: string }) => {
+      return apiRequest(`/api/projects/${id}/milestones/${milestoneId}/cascade-dates?preview=true`, {
+        method: "POST",
+        body: JSON.stringify({ newEndDate, newStartDate, confirm: false })
+      }) as Promise<{ deltaDays: number; affectedCount: number; allocations: any[]; message?: string }>;
+    },
+  });
+
+  const cascadeConfirmMutation = useMutation({
+    mutationFn: async ({ milestoneId, newEndDate, newStartDate, milestoneUpdateData }: {
+      milestoneId: string;
+      newEndDate?: string;
+      newStartDate?: string;
+      milestoneUpdateData: Record<string, unknown>;
+    }) => {
+      return apiRequest(`/api/projects/${id}/milestones/${milestoneId}/cascade-dates`, {
+        method: "POST",
+        body: JSON.stringify({ newEndDate, newStartDate, milestoneUpdateData, confirm: true })
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Dates cascaded", description: "Milestone and allocation dates have been shifted successfully." });
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/allocations`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/milestones`] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to cascade dates", variant: "destructive" });
+    }
+  });
+
+  const bulkAssignRolesMutation = useMutation({
+    mutationFn: async (assignments: { allocationId: string; personId: string }[]) => {
+      return apiRequest(`/api/projects/${id}/allocations/bulk-assign-roles`, {
+        method: "POST",
+        body: JSON.stringify({ assignments })
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Roles assigned", description: "All selected role slots have been assigned." });
+      setShowBulkAssignRolesDialog(false);
+      setBulkAssignSelections({});
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/allocations`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/engagements`] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to bulk assign roles", variant: "destructive" });
+    }
+  });
+
+  const fillRoleSlotsMutation = useMutation({
+    mutationFn: async (assignments: { allocationId: string; personId: string; roleInstanceLabel?: string }[]) => {
+      return apiRequest(`/api/projects/${id}/allocations/bulk-assign-roles`, {
+        method: "POST",
+        body: JSON.stringify({ assignments })
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Role slots filled", description: "All selected slots have been assigned successfully." });
+      setShowFillRoleSlotsDialog(false);
+      setFillRoleSlotsRoleId(null);
+      setFillRoleSlotSelections({});
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/allocations`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/engagements`] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to fill role slots", variant: "destructive" });
+    }
+  });
+
   const deleteMilestoneMutation = useMutation({
     mutationFn: async (milestoneId: string) => {
       return apiRequest(`/api/milestones/${milestoneId}`, {
@@ -1762,6 +1883,22 @@ export default function ProjectDetail() {
         description: error.message || "Failed to delete milestone",
         variant: "destructive"
       });
+    }
+  });
+
+  const updateMilestoneInvoiceStatusMutation = useMutation({
+    mutationFn: async ({ milestoneId, invoiceStatus }: { milestoneId: string; invoiceStatus: string }) => {
+      return apiRequest(`/api/milestones/${milestoneId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ invoiceStatus })
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Billing status updated" });
+      refetchMilestones();
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to update billing status", variant: "destructive" });
     }
   });
 
@@ -2427,13 +2564,15 @@ export default function ProjectDetail() {
         startDate: milestone.startDate || "",
         endDate: milestone.endDate || "",
         budgetHours: milestone.budgetHours?.toString() || "",
+        amount: milestone.amount?.toString() || "",
         status: milestone.status || "not-started",
         projectEpicId: milestone.projectEpicId || "",
+        isPaymentMilestone: milestone.isPaymentMilestone ?? false,
         order: milestone.order || 0
       });
     } else {
       setEditingMilestone(null);
-      milestoneForm.reset();
+      milestoneForm.reset({ isPaymentMilestone: false, status: "not-started", order: 0 });
     }
     setShowMilestoneDialog(true);
   };
@@ -2469,8 +2608,46 @@ export default function ProjectDetail() {
     setShowEpicDialog(true);
   };
 
-  const handleSubmitMilestone = (data: MilestoneFormData) => {
+  const handleSubmitMilestone = async (data: MilestoneFormData) => {
     if (editingMilestone) {
+      const processedData: Record<string, unknown> = {
+        ...data,
+        budgetHours: data.budgetHours ? parseFloat(data.budgetHours) : null,
+        projectEpicId: data.projectEpicId || null,
+        startDate: data.startDate || null,
+        endDate: data.endDate || null,
+        description: data.description || null,
+      };
+
+      const dateChanged = (data.endDate && data.endDate !== (editingMilestone.endDate || "")) ||
+                          (data.startDate && data.startDate !== (editingMilestone.startDate || ""));
+      const hasOldDates = !!(editingMilestone.startDate || editingMilestone.endDate);
+
+      if (dateChanged && hasOldDates) {
+        const newEndDate = data.endDate || undefined;
+        const newStartDate = data.startDate || undefined;
+        try {
+          const preview = await cascadePreviewMutation.mutateAsync({
+            milestoneId: editingMilestone.id,
+            newEndDate,
+            newStartDate,
+          });
+          if (preview.affectedCount > 0) {
+            setCascadePreviewData(preview);
+            setPendingMilestoneUpdate({
+              milestoneId: editingMilestone.id,
+              data,
+              processedData,
+              newEndDate: newEndDate || "",
+              newStartDate,
+            });
+            setShowCascadeDialog(true);
+            return;
+          }
+        } catch {
+          // If preview fails, proceed with normal update
+        }
+      }
       updateMilestoneMutation.mutate({ id: editingMilestone.id, data });
     } else {
       createMilestoneMutation.mutate(data);
@@ -2757,7 +2934,8 @@ export default function ProjectDetail() {
         </div>
 
         {/* Key Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <UITooltipProvider>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -2790,37 +2968,131 @@ export default function ProjectDetail() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Hours Used</p>
-                  <p className="text-2xl font-bold" data-testid="hours-used">
-                    {burnRate.actualHours.toFixed(0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    of {burnRate.estimatedHours.toFixed(0)}
-                  </p>
+                <div className="flex items-center gap-1">
+                  <div>
+                    <p className="text-sm text-muted-foreground flex items-center gap-1">
+                      Hours Used
+                      <UITooltip>
+                        <UITooltipTrigger asChild>
+                          <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                        </UITooltipTrigger>
+                        <UITooltipContent side="top" className="max-w-xs">
+                          Budget from approved estimate; Actual from logged time entries
+                        </UITooltipContent>
+                      </UITooltip>
+                    </p>
+                    <p className="text-2xl font-bold" data-testid="hours-used">
+                      {(hoursSummary?.actualHours ?? burnRate.actualHours).toFixed(0)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      of {(hoursSummary?.budgetedHours ?? burnRate.estimatedHours).toFixed(0)} budgeted hrs
+                    </p>
+                  </div>
                 </div>
                 <Clock className="w-8 h-8 text-muted-foreground opacity-50" />
               </div>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Hours Variance</p>
-                  <p className={`text-2xl font-bold ${burnRate.hoursVariance > 0 ? 'text-red-600' : 'text-green-600'}`} data-testid="hours-variance">
-                    {burnRate.hoursVariance > 0 ? '+' : ''}{burnRate.hoursVariance.toFixed(0)}
-                  </p>
-                </div>
-                {burnRate.hoursVariance > 0 ? (
-                  <TrendingUp className="w-8 h-8 text-red-600 opacity-50" />
-                ) : (
-                  <TrendingDown className="w-8 h-8 text-green-600 opacity-50" />
-                )}
-              </div>
-            </CardContent>
-          </Card>
+          {/* Remaining Hours card with green/amber/red indicator — sourced from /hours-summary */}
+          {(() => {
+            const remainingHrs = hoursSummary?.remainingHours ?? Math.max(0, burnRate.estimatedHours - burnRate.actualHours);
+            const consumedPct = hoursSummary?.hoursConsumedPct ?? (
+              burnRate.estimatedHours > 0
+                ? (burnRate.actualHours / burnRate.estimatedHours) * 100
+                : 0
+            );
+            const remainingColor =
+              consumedPct > 90
+                ? "text-red-600"
+                : consumedPct > 75
+                ? "text-amber-600"
+                : "text-green-600";
+            const remainingBg =
+              consumedPct > 90
+                ? "bg-red-100"
+                : consumedPct > 75
+                ? "bg-amber-100"
+                : "bg-green-100";
+            return (
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground flex items-center gap-1">
+                        Remaining Hours
+                        <UITooltip>
+                          <UITooltipTrigger asChild>
+                            <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                          </UITooltipTrigger>
+                          <UITooltipContent side="top" className="max-w-xs">
+                            Budget from approved estimate; Actual from logged time entries
+                          </UITooltipContent>
+                        </UITooltip>
+                      </p>
+                      <p className={`text-2xl font-bold ${remainingColor}`} data-testid="remaining-hours">
+                        {remainingHrs.toFixed(0)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        hrs left of budget
+                      </p>
+                    </div>
+                    <div className={`w-8 h-8 ${remainingBg} rounded-full flex items-center justify-center`}>
+                      <Activity className={`w-4 h-4 ${remainingColor}`} />
+                    </div>
+                  </div>
+                  <Progress
+                    value={Math.min(consumedPct, 100)}
+                    className="mt-3"
+                  />
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* Hours Variance with sign-aware language — sourced from /hours-summary */}
+          {(() => {
+            const variance = hoursSummary?.hoursVariance ?? burnRate.hoursVariance;
+            return (
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground flex items-center gap-1">
+                        Hours Variance
+                        <UITooltip>
+                          <UITooltipTrigger asChild>
+                            <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                          </UITooltipTrigger>
+                          <UITooltipContent side="top" className="max-w-xs">
+                            Positive = over plan (more hours burned than budgeted). Negative = ahead of plan (hours still available). Budget from approved estimate; Actual from logged time entries.
+                          </UITooltipContent>
+                        </UITooltip>
+                      </p>
+                      <p
+                        className={`text-2xl font-bold ${variance > 0 ? "text-red-600" : variance < 0 ? "text-green-600" : "text-muted-foreground"}`}
+                        data-testid="hours-variance"
+                      >
+                        {variance === 0 ? "0" : (variance > 0 ? "+" : "−") + Math.abs(variance).toFixed(0)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {variance > 0
+                          ? "hrs over plan"
+                          : variance < 0
+                          ? "hrs ahead of plan"
+                          : "on plan"}
+                      </p>
+                    </div>
+                    {variance > 0 ? (
+                      <TrendingUp className="w-8 h-8 text-red-600 opacity-50" />
+                    ) : (
+                      <TrendingDown className="w-8 h-8 text-green-600 opacity-50" />
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           <Card>
             <CardContent className="p-6">
@@ -2835,6 +3107,7 @@ export default function ProjectDetail() {
             </CardContent>
           </Card>
         </div>
+        </UITooltipProvider>
 
         {/* Alerts */}
         {burnRate.burnRatePercentage > 80 && (
@@ -3393,7 +3666,21 @@ export default function ProjectDetail() {
           <TabsContent value="delivery" className="space-y-6">
             <Tabs defaultValue="allocations" className="w-full">
               <TabsList className="mb-4">
-                <TabsTrigger value="allocations" data-testid="tab-delivery-allocations">Team & Assignments</TabsTrigger>
+                <TabsTrigger value="allocations" data-testid="tab-delivery-allocations" className="flex items-center gap-2">
+                  Team &amp; Assignments
+                  {allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline).length > 0 && (
+                    <Badge
+                      variant="secondary"
+                      className="text-xs px-1.5 py-0 h-4 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 cursor-pointer hover:bg-amber-200 dark:hover:bg-amber-800/60"
+                      onClick={() => {
+                        setAllocationAssignedFilter('unassigned');
+                      }}
+                      title="Click to filter to unassigned slots"
+                    >
+                      {allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline).length} open
+                    </Badge>
+                  )}
+                </TabsTrigger>
                 <TabsTrigger value="structure" data-testid="tab-delivery-structure">Project Structure</TabsTrigger>
               </TabsList>
               
@@ -3752,6 +4039,47 @@ export default function ProjectDetail() {
                     <Bookmark className="h-4 w-4 mr-2" />
                     Save Baseline
                   </Button>
+                  {(() => {
+                    const unassignedSlots = allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline);
+                    const roleGroups = unassignedSlots.reduce((acc: Record<string, any[]>, a: any) => {
+                      const key = a.roleId;
+                      if (!acc[key]) acc[key] = [];
+                      acc[key].push(a);
+                      return acc;
+                    }, {});
+                    const multiSlotRoles = Object.entries(roleGroups).filter(([, slots]) => (slots as any[]).length >= 1);
+                    return multiSlotRoles.length > 0 ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            const firstRoleId = multiSlotRoles[0][0];
+                            setFillRoleSlotsRoleId(firstRoleId);
+                            setFillRoleSlotSelections({});
+                            setShowFillRoleSlotsDialog(true);
+                          }}
+                          data-testid="button-fill-role-slots"
+                        >
+                          <UserPlus className="w-4 h-4 mr-2" />
+                          Fill Role Slots
+                          <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0 h-4 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                            {unassignedSlots.length}
+                          </Badge>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setBulkAssignSelections({});
+                            setShowBulkAssignRolesDialog(true);
+                          }}
+                          data-testid="button-bulk-assign-roles"
+                        >
+                          <Users className="w-4 h-4 mr-2" />
+                          Assign All Open Slots
+                        </Button>
+                      </>
+                    ) : null;
+                  })()}
                   <Button 
                     onClick={() => setShowAssignmentDialog(true)}
                     data-testid="button-add-assignment"
@@ -3800,10 +4128,34 @@ export default function ProjectDetail() {
               <CardContent>
                 {/* Filters */}
                 <div className="flex flex-wrap gap-3 mb-4 pb-4 border-b">
+                  <div className="relative flex-1 min-w-[180px] max-w-xs">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by name, role, epic..."
+                      value={allocationSearchQuery}
+                      onChange={(e) => setAllocationSearchQuery(e.target.value)}
+                      className="h-8 pl-8 text-sm"
+                      data-testid="search-allocations"
+                    />
+                  </div>
                   <div className="flex items-center gap-2">
                     <Filter className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">Filters:</span>
                   </div>
+                  <Select
+                    value={allocationAssignedFilter}
+                    onValueChange={(v) => {
+                      setAllocationAssignedFilter(v);
+                    }}
+                  >
+                    <SelectTrigger className="w-[160px] h-8" data-testid="filter-allocation-assigned">
+                      <SelectValue placeholder="Assignment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Slots</SelectItem>
+                      <SelectItem value="assigned">Assigned</SelectItem>
+                      <SelectItem value="unassigned">Unassigned</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <Select
                     value={allocationStatusFilter}
                     onValueChange={setAllocationStatusFilter}
@@ -3863,7 +4215,7 @@ export default function ProjectDetail() {
                         })}
                     </SelectContent>
                   </Select>
-                  {(allocationStatusFilter !== 'all' || allocationResourceFilter !== 'all' || allocationStageFilter !== 'all') && (
+                  {(allocationStatusFilter !== 'all' || allocationResourceFilter !== 'all' || allocationStageFilter !== 'all' || allocationAssignedFilter !== 'all' || allocationSearchQuery) && (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -3872,6 +4224,8 @@ export default function ProjectDetail() {
                         setAllocationStatusFilter('all');
                         setAllocationResourceFilter('all');
                         setAllocationStageFilter('all');
+                        setAllocationAssignedFilter('all');
+                        setAllocationSearchQuery('');
                       }}
                     >
                       <X className="w-3 h-3 mr-1" />
@@ -3900,6 +4254,7 @@ export default function ProjectDetail() {
                         <TableHead>Resource</TableHead>
                         <TableHead>Task/Activity</TableHead>
                         <TableHead>Role</TableHead>
+                        <TableHead>Role Instance</TableHead>
                         <TableHead>Workstream</TableHead>
                         <TableHead>Epic/Stage</TableHead>
                         <TableHead className="text-right">Hours</TableHead>
@@ -3919,6 +4274,18 @@ export default function ProjectDetail() {
                             if (resourceId !== allocationResourceFilter) return false;
                           }
                           if (allocationStageFilter !== 'all' && allocation.stage?.id !== allocationStageFilter) return false;
+                          if (allocationAssignedFilter === 'assigned' && !allocation.personId) return false;
+                          if (allocationAssignedFilter === 'unassigned' && allocation.personId) return false;
+                          if (allocationSearchQuery) {
+                            const q = allocationSearchQuery.toLowerCase();
+                            const personName = (allocation.person?.name || allocation.resourceName || '').toLowerCase();
+                            const roleName = (allocation.role?.name || '').toLowerCase();
+                            const roleInstance = (allocation.roleInstanceLabel || '').toLowerCase();
+                            const epicName = (allocation.epic?.name || '').toLowerCase();
+                            const stageName = (allocation.stage?.name || '').toLowerCase();
+                            const taskDesc = (allocation.taskDescription || '').toLowerCase();
+                            if (!personName.includes(q) && !roleName.includes(q) && !roleInstance.includes(q) && !epicName.includes(q) && !stageName.includes(q) && !taskDesc.includes(q)) return false;
+                          }
                           return true;
                         })
                         .map((allocation: any) => (
@@ -3965,8 +4332,12 @@ export default function ProjectDetail() {
                           </TableCell>
                           <TableCell>
                             {allocation.role?.name || '—'}
-                            {allocation.roleInstanceLabel && (
-                              <Badge variant="outline" className="ml-1 text-xs">{allocation.roleInstanceLabel}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            {allocation.roleInstanceLabel ? (
+                              <Badge variant="outline" className="text-xs font-normal">{allocation.roleInstanceLabel}</Badge>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
                             )}
                           </TableCell>
                           <TableCell>{allocation.workstream?.name || '—'}</TableCell>
@@ -4612,19 +4983,20 @@ export default function ProjectDetail() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Name</TableHead>
+                      <TableHead>Type</TableHead>
                       <TableHead>Epic</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Billing Status</TableHead>
                       <TableHead>Start Date</TableHead>
                       <TableHead>End Date</TableHead>
-                      <TableHead>Budget Hours</TableHead>
-                      <TableHead>Actual Hours</TableHead>
+                      <TableHead>Hours / Amount</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {milestones.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center text-muted-foreground">
+                        <TableCell colSpan={9} className="text-center text-muted-foreground">
                           No milestones found. Click "Add Milestone" to create one.
                         </TableCell>
                       </TableRow>
@@ -4632,6 +5004,19 @@ export default function ProjectDetail() {
                       milestones.map((milestone: any) => (
                         <TableRow key={milestone.id} data-testid={`milestone-row-${milestone.id}`}>
                           <TableCell className="font-medium">{milestone.name}</TableCell>
+                          <TableCell>
+                            {milestone.isPaymentMilestone ? (
+                              <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 border-green-200">
+                                <DollarSign className="w-3 h-3 mr-1" />
+                                Payment
+                              </Badge>
+                            ) : (
+                              <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200">
+                                <CheckCircle className="w-3 h-3 mr-1" />
+                                Delivery
+                              </Badge>
+                            )}
+                          </TableCell>
                           <TableCell>{milestone.epic?.name || '-'}</TableCell>
                           <TableCell>
                             <Badge variant={
@@ -4641,13 +5026,55 @@ export default function ProjectDetail() {
                               {milestone.status}
                             </Badge>
                           </TableCell>
+                          <TableCell>
+                            {milestone.isPaymentMilestone ? (
+                              !embedReadonly && ['admin', 'billing-admin'].includes(user?.role || '') ? (
+                                <Select
+                                  value={milestone.invoiceStatus || 'planned'}
+                                  onValueChange={(value) => updateMilestoneInvoiceStatusMutation.mutate({ milestoneId: milestone.id, invoiceStatus: value })}
+                                >
+                                  <SelectTrigger className="h-7 text-xs w-28">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="planned">Planned</SelectItem>
+                                    <SelectItem value="invoiced">Invoiced</SelectItem>
+                                    <SelectItem value="paid">Paid</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <Badge variant={milestone.invoiceStatus === 'paid' ? 'default' : milestone.invoiceStatus === 'invoiced' ? 'secondary' : 'outline'}>
+                                  {milestone.invoiceStatus === 'paid' ? 'Paid' : milestone.invoiceStatus === 'invoiced' ? 'Invoiced' : 'Planned'}
+                                </Badge>
+                              )
+                            ) : (
+                              <span className="text-muted-foreground text-sm">—</span>
+                            )}
+                          </TableCell>
                           <TableCell>{milestone.startDate ? format(new Date(milestone.startDate), "MMM d, yyyy") : '-'}</TableCell>
                           <TableCell>{milestone.endDate ? format(new Date(milestone.endDate), "MMM d, yyyy") : '-'}</TableCell>
-                          <TableCell>{milestone.budgetHours || '-'}</TableCell>
-                          <TableCell>{milestone.actualHours || '0'}</TableCell>
+                          <TableCell>
+                            {milestone.isPaymentMilestone
+                              ? milestone.amount ? `$${Number(milestone.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'
+                              : milestone.budgetHours ? `${milestone.budgetHours} hrs` : '-'
+                            }
+                          </TableCell>
                           {!embedReadonly && (
                           <TableCell>
                             <div className="flex items-center justify-end gap-2">
+                              {milestone.isPaymentMilestone && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  asChild
+                                  title="View in Billing"
+                                  data-testid={`button-billing-link-${milestone.id}`}
+                                >
+                                  <Link to={`/billing?milestoneId=${milestone.id}`}>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </Link>
+                                </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -5730,6 +6157,37 @@ export default function ProjectDetail() {
               <form name="project-milestone-form" onSubmit={milestoneForm.handleSubmit(handleSubmitMilestone)} className="space-y-4">
                 <FormField
                   control={milestoneForm.control}
+                  name="isPaymentMilestone"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Milestone Type</FormLabel>
+                      <FormControl>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => field.onChange(false)}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors ${!field.value ? 'bg-blue-600 text-white border-blue-600' : 'bg-background text-muted-foreground border-border hover:bg-muted/50'}`}
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                            Delivery Gate
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => field.onChange(true)}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors ${field.value ? 'bg-green-600 text-white border-green-600' : 'bg-background text-muted-foreground border-border hover:bg-muted/50'}`}
+                          >
+                            <DollarSign className="w-4 h-4" />
+                            Payment Trigger
+                          </button>
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={milestoneForm.control}
                   name="name"
                   render={({ field }) => (
                     <FormItem>
@@ -5815,19 +6273,35 @@ export default function ProjectDetail() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <FormField
-                    control={milestoneForm.control}
-                    name="budgetHours"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Budget Hours</FormLabel>
-                        <FormControl>
-                          <Input {...field} type="number" step="0.5" placeholder="0" data-testid="input-milestone-budget-hours" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                  {milestoneForm.watch('isPaymentMilestone') ? (
+                    <FormField
+                      control={milestoneForm.control}
+                      name="amount"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Amount ($)</FormLabel>
+                          <FormControl>
+                            <Input {...field} type="number" step="0.01" placeholder="0.00" data-testid="input-milestone-amount" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  ) : (
+                    <FormField
+                      control={milestoneForm.control}
+                      name="budgetHours"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Budget Hours</FormLabel>
+                          <FormControl>
+                            <Input {...field} type="number" step="0.5" placeholder="0" data-testid="input-milestone-budget-hours" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
                   <FormField
                     control={milestoneForm.control}
                     name="status"
@@ -5862,6 +6336,469 @@ export default function ProjectDetail() {
                 </DialogFooter>
               </form>
             </Form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Cascade Date Shift Confirmation Dialog */}
+        <Dialog open={showCascadeDialog} onOpenChange={(open) => {
+          if (!open && !cascadeConfirmMutation.isPending) {
+            // Closing the dialog without choosing = treat as "Skip" (milestone-only update)
+            setShowCascadeDialog(false);
+            if (pendingMilestoneUpdate) {
+              updateMilestoneMutation.mutate({ id: pendingMilestoneUpdate.milestoneId, data: pendingMilestoneUpdate.data });
+              setPendingMilestoneUpdate(null);
+              setCascadePreviewData(null);
+              setShowMilestoneDialog(false);
+            }
+          }
+        }}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-primary" />
+                Cascade Date Shift to Allocations
+              </DialogTitle>
+              <DialogDescription>
+                {cascadePreviewData && (
+                  <>
+                    The milestone date is shifting by{" "}
+                    <strong>{cascadePreviewData.deltaDays > 0 ? "+" : ""}{cascadePreviewData.deltaDays} days</strong>.{" "}
+                    {cascadePreviewData.affectedCount} allocation{cascadePreviewData.affectedCount !== 1 ? "s" : ""} fall within the current milestone window. Would you like to shift their planned dates by the same amount?
+                  </>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            {cascadePreviewData && cascadePreviewData.allocations.length > 0 && (
+              <div className="max-h-64 overflow-y-auto border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Resource</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Current Start</TableHead>
+                      <TableHead>New Start</TableHead>
+                      <TableHead>Current End</TableHead>
+                      <TableHead>New End</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cascadePreviewData.allocations.map((a) => (
+                      <TableRow key={a.id}>
+                        <TableCell className="text-sm">{a.personName || <span className="text-muted-foreground">Unassigned</span>}</TableCell>
+                        <TableCell className="text-sm">
+                          {a.roleName || "—"}
+                          {a.roleInstanceLabel && (
+                            <Badge variant="outline" className="ml-1 text-xs">{a.roleInstanceLabel}</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{a.plannedStartDate || "—"}</TableCell>
+                        <TableCell className="text-sm font-medium text-primary">{a.newPlannedStartDate || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{a.plannedEndDate || "—"}</TableCell>
+                        <TableCell className="text-sm font-medium text-primary">{a.newPlannedEndDate || "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <DialogFooter className="flex gap-2">
+              <Button
+                variant="outline"
+                disabled={cascadeConfirmMutation.isPending || updateMilestoneMutation.isPending}
+                onClick={() => {
+                  // Skip cascade — just update the milestone, no allocation shifts
+                  if (!pendingMilestoneUpdate) return;
+                  updateMilestoneMutation.mutate({ id: pendingMilestoneUpdate.milestoneId, data: pendingMilestoneUpdate.data });
+                  setShowCascadeDialog(false);
+                  setPendingMilestoneUpdate(null);
+                  setCascadePreviewData(null);
+                  setShowMilestoneDialog(false);
+                }}
+              >
+                Skip &amp; Update Milestone Only
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (!pendingMilestoneUpdate) return;
+                  // Single call: update milestone + cascade allocations atomically on the server
+                  await cascadeConfirmMutation.mutateAsync({
+                    milestoneId: pendingMilestoneUpdate.milestoneId,
+                    newEndDate: pendingMilestoneUpdate.newEndDate || undefined,
+                    newStartDate: pendingMilestoneUpdate.newStartDate,
+                    milestoneUpdateData: pendingMilestoneUpdate.processedData,
+                  });
+                  // Clear pending state BEFORE closing dialog so onOpenChange's
+                  // "skip" guard cannot fire after a successful cascade
+                  setPendingMilestoneUpdate(null);
+                  setCascadePreviewData(null);
+                  setShowMilestoneDialog(false);
+                  setShowCascadeDialog(false);
+                }}
+                disabled={cascadeConfirmMutation.isPending || updateMilestoneMutation.isPending}
+              >
+                {cascadeConfirmMutation.isPending ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Applying...</>
+                ) : (
+                  <>Cascade Date Shift</>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Role Assignment Dialog */}
+        <Dialog open={showBulkAssignRolesDialog} onOpenChange={(open) => {
+          if (!open) {
+            setShowBulkAssignRolesDialog(false);
+            setBulkAssignSelections({});
+          }
+        }}>
+          <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-primary" />
+                Assign Multiple Role Slots
+              </DialogTitle>
+              <DialogDescription>
+                Assign each unassigned role slot to a person. Select a person for each row and submit all at once.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex-1 overflow-y-auto">
+              {(() => {
+                const placeholders = allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline);
+                if (placeholders.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p>No unassigned role slots found</p>
+                    </div>
+                  );
+                }
+                return (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Role</TableHead>
+                        <TableHead>Task</TableHead>
+                        <TableHead>Hours</TableHead>
+                        <TableHead>Dates</TableHead>
+                        <TableHead className="w-64">Assign To</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {placeholders.map((allocation: any) => (
+                        <TableRow key={allocation.id}>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium text-sm">{allocation.role?.name || "—"}</div>
+                              {allocation.roleInstanceLabel && (
+                                <Badge variant="outline" className="mt-0.5 text-xs">{allocation.roleInstanceLabel}</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground max-w-32 truncate">
+                            {allocation.taskDescription || "—"}
+                          </TableCell>
+                          <TableCell className="text-sm">{parseFloat(allocation.hours || "0").toFixed(1)}h</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {allocation.plannedStartDate ? allocation.plannedStartDate : "—"}
+                            {allocation.plannedStartDate && allocation.plannedEndDate ? " → " : ""}
+                            {allocation.plannedEndDate ? allocation.plannedEndDate : ""}
+                          </TableCell>
+                          <TableCell>
+                            <Select
+                              value={bulkAssignSelections[allocation.id] || ""}
+                              onValueChange={(value) => setBulkAssignSelections(prev => ({
+                                ...prev,
+                                [allocation.id]: value === "_none" ? "" : value
+                              }))}
+                            >
+                              <SelectTrigger className="h-8 text-sm">
+                                <SelectValue placeholder="Select person..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="_none">— Not assigned —</SelectItem>
+                                {(users as any[]).filter((u: any) => u.isAssignable !== false && u.isActive !== false).map((u: any) => (
+                                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                );
+              })()}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setShowBulkAssignRolesDialog(false); setBulkAssignSelections({}); }}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  const assignments = Object.entries(bulkAssignSelections)
+                    .filter(([, personId]) => !!personId)
+                    .map(([allocationId, personId]) => ({ allocationId, personId }));
+                  if (assignments.length === 0) {
+                    toast({ title: "No assignments selected", description: "Please select at least one person to assign.", variant: "destructive" });
+                    return;
+                  }
+                  bulkAssignRolesMutation.mutate(assignments);
+                }}
+                disabled={bulkAssignRolesMutation.isPending}
+              >
+                {bulkAssignRolesMutation.isPending ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Assigning...</>
+                ) : (
+                  <>Assign {Object.values(bulkAssignSelections).filter(Boolean).length > 0
+                    ? `${Object.values(bulkAssignSelections).filter(Boolean).length} Slot${Object.values(bulkAssignSelections).filter(Boolean).length !== 1 ? "s" : ""}`
+                    : "Selected Slots"}</>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Fill Role Slots Dialog — assign different people to slots of a specific role */}
+        <Dialog open={showFillRoleSlotsDialog} onOpenChange={(open) => {
+          if (!open) {
+            setShowFillRoleSlotsDialog(false);
+            setFillRoleSlotsRoleId(null);
+            setFillRoleSlotSelections({});
+          }
+        }}>
+          <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-primary" />
+                Fill Role Slots
+              </DialogTitle>
+              <DialogDescription>
+                Select a role to view its open slots, then assign a different person to each slot in one submission.
+              </DialogDescription>
+            </DialogHeader>
+            {(() => {
+              const unassignedSlots = allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline);
+              const roleGroups = unassignedSlots.reduce((acc: Record<string, any[]>, a: any) => {
+                const key = a.roleId;
+                if (!acc[key]) acc[key] = [];
+                acc[key].push(a);
+                return acc;
+              }, {});
+              const roleIds = Object.keys(roleGroups);
+              const activeRoleId = fillRoleSlotsRoleId || roleIds[0] || null;
+              const activeSlots = activeRoleId ? (roleGroups[activeRoleId] || []) : [];
+              const activeRoleName = activeSlots[0]?.role?.name || 'Unknown Role';
+              const assignableUsers = (users as any[]).filter((u: any) => u.isAssignable !== false && u.isActive !== false);
+              const initSlotLabel = (slot: any, idx: number) => {
+                const roleName = slot.role?.name || 'Resource';
+                return slot.roleInstanceLabel || `${roleName} ${idx + 1}`;
+              };
+
+              return (
+                <>
+                  {roleIds.length > 1 && (
+                    <div className="flex gap-2 pb-2 border-b overflow-x-auto">
+                      {roleIds.map((roleId) => {
+                        const sample = roleGroups[roleId][0];
+                        return (
+                          <button
+                            key={roleId}
+                            onClick={() => {
+                              setFillRoleSlotsRoleId(roleId);
+                              setFillRoleSlotSelections({});
+                            }}
+                            className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm transition-colors ${
+                              activeRoleId === roleId
+                                ? 'bg-primary text-primary-foreground border-primary'
+                                : 'bg-background hover:bg-muted/50 border-border'
+                            }`}
+                          >
+                            {sample?.role?.name || 'Unknown'}
+                            <Badge variant={activeRoleId === roleId ? 'secondary' : 'outline'} className="text-xs px-1.5 py-0 h-4">
+                              {roleGroups[roleId].length}
+                            </Badge>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="flex-1 overflow-y-auto">
+                    {activeSlots.length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>No open slots for this role</p>
+                      </div>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-12">#</TableHead>
+                            <TableHead>Role Instance Label</TableHead>
+                            <TableHead>Task</TableHead>
+                            <TableHead>Hours</TableHead>
+                            <TableHead className="w-56">Assign To</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {activeSlots.map((slot: any, idx: number) => {
+                            const sel = fillRoleSlotSelections[slot.id] || { personId: '', label: initSlotLabel(slot, idx) };
+                            return (
+                              <TableRow key={slot.id}>
+                                <TableCell className="text-muted-foreground text-sm font-mono">{idx + 1}</TableCell>
+                                <TableCell>
+                                  <Input
+                                    value={sel.label}
+                                    onChange={(e) => setFillRoleSlotSelections(prev => ({
+                                      ...prev,
+                                      [slot.id]: { ...sel, label: e.target.value }
+                                    }))}
+                                    placeholder={`${activeRoleName} ${idx + 1}`}
+                                    className="h-8 text-sm w-40"
+                                  />
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground max-w-32 truncate">
+                                  {slot.taskDescription || '—'}
+                                </TableCell>
+                                <TableCell className="text-sm">{parseFloat(slot.hours || '0').toFixed(1)}h</TableCell>
+                                <TableCell>
+                                  <Select
+                                    value={sel.personId || ''}
+                                    onValueChange={(value) => setFillRoleSlotSelections(prev => ({
+                                      ...prev,
+                                      [slot.id]: { ...sel, personId: value === '_none' ? '' : value }
+                                    }))}
+                                  >
+                                    <SelectTrigger className="h-8 text-sm">
+                                      <SelectValue placeholder="Select person..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="_none">— Not assigned —</SelectItem>
+                                      {assignableUsers.map((u: any) => (
+                                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+            {/* Separator + "Assign all to one person" alternative action */}
+            {(() => {
+              const unassignedSlots = allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline);
+              const roleGroups = unassignedSlots.reduce((acc: Record<string, any[]>, a: any) => {
+                const key = a.roleId;
+                if (!acc[key]) acc[key] = [];
+                acc[key].push(a);
+                return acc;
+              }, {});
+              const roleIds = Object.keys(roleGroups);
+              const activeRoleId = fillRoleSlotsRoleId || roleIds[0] || null;
+              const activeSlots = activeRoleId ? (roleGroups[activeRoleId] || []) : [];
+              const activeRoleName = activeSlots[0]?.role?.name || 'Role';
+              const assignableUsers = (users as any[]).filter((u: any) => u.isAssignable !== false && u.isActive !== false);
+              if (activeSlots.length === 0) return null;
+              return (
+                <div className="border-t pt-3 px-1">
+                  <p className="text-xs text-muted-foreground mb-2 font-medium">
+                    Or: assign all <span className="font-semibold text-foreground">{activeRoleName}</span> slots to one person
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={fillRoleSlotsReassignPersonId}
+                      onValueChange={setFillRoleSlotsReassignPersonId}
+                    >
+                      <SelectTrigger className="h-8 text-sm flex-1">
+                        <SelectValue placeholder="Select person..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {assignableUsers.map((u: any) => (
+                          <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!fillRoleSlotsReassignPersonId || bulkReassignRoleMutation.isPending}
+                      onClick={() => {
+                        if (!activeRoleId || !fillRoleSlotsReassignPersonId) return;
+                        bulkReassignRoleMutation.mutate({ roleId: activeRoleId, personId: fillRoleSlotsReassignPersonId });
+                        setShowFillRoleSlotsDialog(false);
+                        setFillRoleSlotsRoleId(null);
+                        setFillRoleSlotSelections({});
+                        setFillRoleSlotsReassignPersonId('');
+                      }}
+                    >
+                      {bulkReassignRoleMutation.isPending ? (
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      ) : (
+                        <Users className="w-3 h-3 mr-1" />
+                      )}
+                      Assign all {activeRoleName} slots to one person
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
+            <DialogFooter className="border-t pt-4">
+              <Button variant="outline" onClick={() => { setShowFillRoleSlotsDialog(false); setFillRoleSlotsRoleId(null); setFillRoleSlotSelections({}); setFillRoleSlotsReassignPersonId(''); }}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  const unassignedSlots = allocations.filter((a: any) => a.roleId && !a.personId && !a.isBaseline);
+                  const roleGroups = unassignedSlots.reduce((acc: Record<string, any[]>, a: any) => {
+                    const key = a.roleId;
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(a);
+                    return acc;
+                  }, {});
+                  const roleIds = Object.keys(roleGroups);
+                  const activeRoleId = fillRoleSlotsRoleId || roleIds[0] || null;
+                  const activeSlots = activeRoleId ? (roleGroups[activeRoleId] || []) : [];
+
+                  const assignments = activeSlots
+                    .map((slot: any, idx: number) => {
+                      const sel = fillRoleSlotSelections[slot.id] || { personId: '', label: (slot.role?.name ? `${slot.role.name} ${idx + 1}` : `Resource ${idx + 1}`) };
+                      if (!sel.personId) return null;
+                      return {
+                        allocationId: slot.id,
+                        personId: sel.personId,
+                        roleInstanceLabel: sel.label || undefined
+                      };
+                    })
+                    .filter(Boolean) as { allocationId: string; personId: string; roleInstanceLabel?: string }[];
+
+                  if (assignments.length === 0) {
+                    toast({ title: "No assignments selected", description: "Please assign at least one person.", variant: "destructive" });
+                    return;
+                  }
+                  fillRoleSlotsMutation.mutate(assignments);
+                }}
+                disabled={fillRoleSlotsMutation.isPending}
+              >
+                {fillRoleSlotsMutation.isPending ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving...</>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 mr-2" />
+                    {(() => {
+                      const count = Object.values(fillRoleSlotSelections).filter(s => s.personId).length;
+                      return count > 0 ? `Assign ${count} Slot${count !== 1 ? 's' : ''}` : 'Assign Selected Slots';
+                    })()}
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 

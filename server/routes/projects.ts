@@ -564,6 +564,199 @@ export function registerProjectRoutes(app: Express, deps: ProjectRouteDeps) {
     }
   });
 
+  // Cascade date shift: preview OR atomically update milestone + shift allocations
+  // preview=true (query param): computes delta from current milestone dates, returns preview without any DB writes
+  // confirm=true (body): reads current milestone dates first, then in ONE transaction updates the milestone + shifts allocations
+  app.post("/api/projects/:projectId/milestones/:milestoneId/cascade-dates", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const { projectId, milestoneId } = req.params;
+      const preview = req.query.preview === "true";
+      const { newEndDate, newStartDate, milestoneUpdateData, confirm: doConfirm } = req.body as {
+        newEndDate?: string;
+        newStartDate?: string;
+        milestoneUpdateData?: Record<string, unknown>;
+        confirm?: boolean;
+      };
+
+      const milestone = await storage.getProjectMilestone(milestoneId);
+      if (!milestone) return res.status(404).json({ message: "Milestone not found" });
+      if (milestone.projectId !== projectId) return res.status(400).json({ message: "Milestone does not belong to this project" });
+
+      // Use the milestone's CURRENT stored dates as the baseline for delta computation
+      const oldStart = milestone.startDate as string | null;
+      const oldEnd = milestone.endDate as string | null;
+
+      if (!oldEnd && !oldStart) {
+        return res.status(400).json({ message: "Milestone has no dates configured for cascade" });
+      }
+
+      const referenceOldDate = oldEnd ?? oldStart;
+      const referenceNewDate = newEndDate ?? newStartDate;
+      if (!referenceNewDate) {
+        return res.status(400).json({ message: "newEndDate or newStartDate is required" });
+      }
+
+      const deltaDays = Math.round(
+        (new Date(referenceNewDate).getTime() - new Date(referenceOldDate!).getTime()) / 86400000
+      );
+
+      if (deltaDays === 0) {
+        return res.json({ deltaDays: 0, affectedCount: 0, allocations: [], message: "No date change detected" });
+      }
+
+      const allAllocations = await storage.getProjectAllocations(projectId);
+
+      // Find non-baseline allocations whose planned dates fall within the OLD milestone window
+      const affected = allAllocations.filter((a: any) => {
+        if (a.isBaseline) return false;
+        if (!a.plannedStartDate && !a.plannedEndDate) return false;
+        const aStart = a.plannedStartDate ? new Date(a.plannedStartDate).getTime() : null;
+        const aEnd = a.plannedEndDate ? new Date(a.plannedEndDate).getTime() : null;
+        const windowStart = oldStart ? new Date(oldStart).getTime() : null;
+        const windowEnd = oldEnd ? new Date(oldEnd).getTime() : null;
+        if (windowStart && windowEnd) {
+          return (aStart !== null && aStart >= windowStart) && (aEnd !== null && aEnd <= windowEnd);
+        } else if (windowEnd) {
+          return aEnd !== null && aEnd <= windowEnd;
+        } else if (windowStart) {
+          return aStart !== null && aStart >= windowStart;
+        }
+        return false;
+      });
+
+      if (preview || !doConfirm) {
+        return res.json({
+          deltaDays,
+          affectedCount: affected.length,
+          allocations: affected.map((a: any) => ({
+            id: a.id,
+            personName: a.person?.name ?? a.resourceName ?? null,
+            roleName: a.role?.name ?? null,
+            roleInstanceLabel: a.roleInstanceLabel ?? null,
+            plannedStartDate: a.plannedStartDate,
+            plannedEndDate: a.plannedEndDate,
+            newPlannedStartDate: a.plannedStartDate
+              ? new Date(new Date(a.plannedStartDate).getTime() + deltaDays * 86400000).toISOString().split("T")[0]
+              : null,
+            newPlannedEndDate: a.plannedEndDate
+              ? new Date(new Date(a.plannedEndDate).getTime() + deltaDays * 86400000).toISOString().split("T")[0]
+              : null,
+          })),
+        });
+      }
+
+      // Apply milestone update + allocation cascade in a SINGLE transaction
+      await db.transaction(async (tx) => {
+        // 1. Update the milestone itself with the new dates (and any other fields)
+        if (milestoneUpdateData) {
+          await tx
+            .update(projectMilestones)
+            .set(milestoneUpdateData as any)
+            .where(eq(projectMilestones.id, milestoneId));
+        }
+
+        // 2. Shift all affected allocations, recording prior dates for audit
+        for (const a of affected) {
+          const newAllocStart = a.plannedStartDate
+            ? new Date(new Date(a.plannedStartDate).getTime() + deltaDays * 86400000).toISOString().split("T")[0]
+            : null;
+          const newAllocEnd = a.plannedEndDate
+            ? new Date(new Date(a.plannedEndDate).getTime() + deltaDays * 86400000).toISOString().split("T")[0]
+            : null;
+          await tx
+            .update(projectAllocations)
+            .set({
+              plannedStartDate: newAllocStart,
+              plannedEndDate: newAllocEnd,
+              priorPlannedStartDate: a.plannedStartDate,
+              priorPlannedEndDate: a.plannedEndDate,
+              cascadeSourceMilestoneId: milestoneId,
+            })
+            .where(eq(projectAllocations.id, a.id));
+        }
+      });
+
+      console.log(`[TELEMETRY] cascade-dates projectId=${projectId} milestoneId=${milestoneId} deltaDays=${deltaDays} affected=${affected.length} by=${req.user?.id}`);
+
+      res.json({ deltaDays, affectedCount: affected.length, applied: true });
+    } catch (error: any) {
+      console.error("[ERROR] Failed to cascade milestone dates:", error);
+      res.status(500).json({ message: "Failed to cascade milestone dates" });
+    }
+  });
+
+  // Bulk assign roles: accept [{allocationId, personId, roleInstanceLabel?}] and execute atomically with full validation
+  app.post("/api/projects/:projectId/allocations/bulk-assign-roles", requireAuth, requireRole(["admin", "pm", "portfolio-manager"]), async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { assignments } = req.body as { assignments: { allocationId: string; personId: string; roleInstanceLabel?: string }[] };
+
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({ message: "assignments array is required and must not be empty" });
+      }
+      for (const item of assignments) {
+        if (!item.allocationId || !item.personId) {
+          return res.status(400).json({ message: "Each assignment must have allocationId and personId" });
+        }
+      }
+
+      const allocationIds = assignments.map(a => a.allocationId);
+
+      // Validate every requested allocationId belongs to this project and is non-baseline before touching DB
+      const existing = await db
+        .select({ id: projectAllocations.id })
+        .from(projectAllocations)
+        .where(
+          and(
+            eq(projectAllocations.projectId, projectId),
+            eq(projectAllocations.isBaseline, false),
+            inArray(projectAllocations.id, allocationIds)
+          )
+        );
+
+      const validIds = new Set(existing.map(r => r.id));
+      const invalidIds = allocationIds.filter(id => !validIds.has(id));
+      if (invalidIds.length > 0) {
+        return res.status(400).json({
+          message: `${invalidIds.length} allocationId(s) not found in project or are ineligible: ${invalidIds.join(", ")}`,
+        });
+      }
+
+      // All IDs are valid — apply atomically
+      await db.transaction(async (tx) => {
+        for (const item of assignments) {
+          const updateFields: Record<string, any> = { personId: item.personId, pricingMode: "person" };
+          if (item.roleInstanceLabel !== undefined) {
+            updateFields.roleInstanceLabel = item.roleInstanceLabel || null;
+          }
+          await tx
+            .update(projectAllocations)
+            .set(updateFields)
+            .where(and(eq(projectAllocations.id, item.allocationId), eq(projectAllocations.projectId, projectId), eq(projectAllocations.isBaseline, false)));
+        }
+      });
+
+      // Ensure engagements and fire Teams hooks for each unique person
+      const uniquePersonIds = [...new Set(assignments.map(a => a.personId))];
+      for (const personId of uniquePersonIds) {
+        await storage.ensureProjectEngagement(projectId, personId);
+        import('../services/teams-automation-service').then(({ teamsAutomationService }) => {
+          teamsAutomationService.onUserAssignedToProject(
+            projectId, personId,
+            { tenantId: req.user?.tenantId, triggeredBy: req.user?.id }
+          ).catch(() => {});
+        }).catch(() => {});
+      }
+
+      console.log(`[TELEMETRY] bulk-assign-roles projectId=${projectId} count=${assignments.length} by=${req.user?.id}`);
+
+      res.json({ assignedCount: assignments.length });
+    } catch (error: any) {
+      console.error("[ERROR] Failed to bulk assign roles:", error);
+      res.status(500).json({ message: "Failed to bulk assign roles" });
+    }
+  });
+
   // Project Engagements - track user's overall engagement status on a project
   app.get("/api/projects/:projectId/engagements", requireAuth, async (req, res) => {
     try {
@@ -704,6 +897,25 @@ export function registerProjectRoutes(app: Express, deps: ProjectRouteDeps) {
     }
   });
 
+  // Pre-flight data quality check for status report generation
+  app.post("/api/projects/:projectId/status-report/preflight", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { startDate, endDate } = req.body;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ message: "startDate and endDate are required" });
+      }
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const tenantId = (req.user as any)?.tenantId;
+      const qualityReport = await storage.checkStatusReportDataQuality(projectId, startDate, endDate, tenantId);
+      res.json(qualityReport);
+    } catch (error: any) {
+      console.error("[STATUS-REPORT-PREFLIGHT] Error:", error);
+      res.status(500).json({ message: "Failed to run pre-flight check" });
+    }
+  });
+
   // Generate AI-powered status report for a project
   app.post("/api/projects/:projectId/status-report", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     req.setTimeout(180000);
@@ -760,12 +972,12 @@ export function registerProjectRoutes(app: Express, deps: ProjectRouteDeps) {
 
       const activeMilestones = milestones
         .filter(m => m.status !== "completed")
-        .map(m => `- ${m.name} (${m.status})${m.dueDate ? ` — Due: ${m.dueDate}` : ""}`)
+        .map(m => `- [${m.isPaymentMilestone ? 'Payment Milestone' : 'Delivery Gate'}] ${m.name} (${m.status})${m.invoiceStatus ? ` — Invoice: ${m.invoiceStatus}` : ''}${m.targetDate ? ` — Due: ${m.targetDate}` : ""}`)
         .join("\n") || "No active milestones.";
 
       const completedMilestones = milestones
         .filter(m => m.status === "completed")
-        .map(m => `- ${m.name} (completed)`)
+        .map(m => `- [${m.isPaymentMilestone ? 'Payment Milestone' : 'Delivery Gate'}] ${m.name} (completed)${m.invoiceStatus ? ` — Invoice: ${m.invoiceStatus}` : ''}`)
         .join("\n") || "None completed in this period.";
 
       const activeTeamCount = allocations.filter((a: any) => a.status === "open" || a.status === "in_progress").length;
@@ -1004,6 +1216,14 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
       };
       const targetMaxTokens = maxTokensByStyle[reportStyle] || 4096;
 
+      // Pre-flight data quality check — runs before AI generation so warnings are available even if generation fails
+      let dataQualityReport: Awaited<ReturnType<typeof storage.checkStatusReportDataQuality>> | null = null;
+      try {
+        dataQualityReport = await storage.checkStatusReportDataQuality(projectId, startDate, endDate, user.tenantId);
+      } catch (qErr) {
+        console.warn("[STATUS-REPORT] Could not run data quality pre-flight:", qErr);
+      }
+
       // Classify AI errors into actionable categories for clear user messaging
       function classifyAiError(err: any): { userMessage: string; retryable: boolean } {
         const msg: string = (err?.message || '').toLowerCase();
@@ -1067,6 +1287,8 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
         generatedAt: new Date().toISOString(),
         generatedBy: user.name || user.email,
         raidd: raiddCounts,
+        dataQualityWarnings: dataQualityReport?.warnings || [],
+        dataQualityOverallStatus: dataQualityReport?.overallStatus || null,
       };
 
       const savedReport = await storage.createStatusReport({
@@ -4616,11 +4838,11 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
 
       const activeMilestones = milestones
         .filter(m => m.status !== "completed")
-        .map(m => `- ${m.name} (${m.status})`)
+        .map(m => `- [${m.isPaymentMilestone ? 'Payment Milestone' : 'Delivery Gate'}] ${m.name} (${m.status})${m.invoiceStatus ? ` — Invoice: ${m.invoiceStatus}` : ''}`)
         .join("\n") || "No active milestones.";
 
       const completedMilestonesSummary = completedMilestones
-        .map(m => `- ${m.name} (completed)`)
+        .map(m => `- [${m.isPaymentMilestone ? 'Payment Milestone' : 'Delivery Gate'}] ${m.name} (completed)${m.invoiceStatus ? ` — Invoice: ${m.invoiceStatus}` : ''}`)
         .join("\n") || "None completed in this period.";
 
       const activeTeamCount = allocations.filter((a: any) => a.status === "open" || a.status === "in_progress").length;
@@ -5731,6 +5953,21 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
         order: req.body.order ?? 0
       };
       const milestone = await storage.createProjectMilestone(milestoneData);
+
+      // Audit log when a payment milestone is created
+      if (milestone.isPaymentMilestone) {
+        console.info('[AUDIT] milestone.payment.created', JSON.stringify({
+          timestamp: new Date().toISOString(),
+          tenantId: req.user?.tenantId || null,
+          userId: req.user?.id || null,
+          milestoneId: milestone.id,
+          milestoneName: milestone.name,
+          projectId: milestone.projectId,
+          amount: milestone.amount,
+          invoiceStatus: milestone.invoiceStatus,
+        }));
+      }
+
       res.json(milestone);
     } catch (error) {
       console.error("Error creating milestone:", error);
@@ -5739,9 +5976,63 @@ ${decisionSummary}${raiddCounts.overdueActionItems > 0 ? `\n\n⚠️ OVERDUE ACT
   });
 
   // Update milestone
-  app.patch("/api/milestones/:id", requireAuth, requireRole(["admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
+  app.patch("/api/milestones/:id", requireAuth, requireRole(["admin", "billing-admin", "pm", "portfolio-manager", "executive"]), async (req, res) => {
     try {
+      const userRole = req.user?.role;
+      const INVOICE_STATUS_VALUES = ['planned', 'invoiced', 'paid'] as const;
+
+      // billing-admin may only update invoiceStatus — reject any other fields
+      if (userRole === 'billing-admin') {
+        const allowedFields = new Set(['invoiceStatus']);
+        const disallowedFields = Object.keys(req.body).filter(k => !allowedFields.has(k));
+        if (disallowedFields.length > 0) {
+          return res.status(403).json({ message: "Billing administrators may only update invoice status" });
+        }
+      }
+
+      // Field-level authorization: only admin or billing-admin may change invoiceStatus
+      if (req.body.invoiceStatus !== undefined) {
+        if (userRole !== 'admin' && userRole !== 'billing-admin') {
+          return res.status(403).json({ message: "Only billing administrators can update invoice status" });
+        }
+        // Enum validation for invoiceStatus
+        if (!INVOICE_STATUS_VALUES.includes(req.body.invoiceStatus)) {
+          return res.status(400).json({ message: `invoiceStatus must be one of: ${INVOICE_STATUS_VALUES.join(', ')}` });
+        }
+      }
+
+      const prevMilestone = await storage.getProjectMilestoneById(req.params.id);
+
+      // Enforce forward-only invoice status transitions (planned → invoiced → paid)
+      if (req.body.invoiceStatus !== undefined && prevMilestone?.invoiceStatus) {
+        const statusOrder: Record<string, number> = { planned: 0, invoiced: 1, paid: 2 };
+        const prevRank = statusOrder[prevMilestone.invoiceStatus] ?? -1;
+        const newRank = statusOrder[req.body.invoiceStatus] ?? -1;
+        if (newRank < prevRank) {
+          return res.status(400).json({ message: `Invoice status cannot be moved backward from '${prevMilestone.invoiceStatus}' to '${req.body.invoiceStatus}'` });
+        }
+      }
       const milestone = await storage.updateProjectMilestone(req.params.id, req.body);
+
+      // Audit log when invoiceStatus advances on a payment milestone
+      if (
+        milestone.isPaymentMilestone &&
+        req.body.invoiceStatus !== undefined &&
+        prevMilestone &&
+        prevMilestone.invoiceStatus !== req.body.invoiceStatus
+      ) {
+        console.info('[AUDIT] milestone.invoiceStatus.changed', JSON.stringify({
+          timestamp: new Date().toISOString(),
+          tenantId: req.user?.tenantId || null,
+          userId: req.user?.id || null,
+          milestoneId: milestone.id,
+          milestoneName: milestone.name,
+          projectId: milestone.projectId,
+          previousStatus: prevMilestone.invoiceStatus,
+          newStatus: req.body.invoiceStatus,
+        }));
+      }
+
       res.json(milestone);
     } catch (error) {
       res.status(500).json({ message: "Failed to update milestone" });
