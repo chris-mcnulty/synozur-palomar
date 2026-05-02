@@ -47,6 +47,8 @@ import UserGuide from "@/pages/user-guide";
 import Changelog from "@/pages/changelog";
 import Roadmap from "@/pages/roadmap";
 import Support from "@/pages/support";
+import PortalTicket from "@/pages/portal-ticket";
+import PortalLookup from "@/pages/portal-lookup";
 import Login from "@/pages/login";
 import Signup from "@/pages/signup";
 import FileRepository from "@/pages/file-repository";
@@ -185,6 +187,8 @@ function Router() {
       <Route path="/embed/estimates/:id" component={EmbedEstimate} />
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
+      <Route path="/portal" component={PortalLookup} />
+      <Route path="/portal/ticket/:token" component={PortalTicket} />
       <Route path="/">
         {user ? <Dashboard /> : <Redirect to="/login" />}
       </Route>

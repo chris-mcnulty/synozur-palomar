@@ -3098,23 +3098,121 @@ export type GroundingDocument = typeof groundingDocuments.$inferSelect;
 // ============================================================================
 
 export const TICKET_CATEGORIES = ['bug', 'feature_request', 'question', 'feedback'] as const;
-export const TICKET_PRIORITIES = ['low', 'medium', 'high'] as const;
-export const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const;
+export const TICKET_PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
+export const TICKET_STATUSES = ['new', 'open', 'in_progress', 'pending', 'on_hold', 'resolved', 'closed', 'cancelled'] as const;
+export const TICKET_TYPES = ['incident', 'service_request', 'problem', 'change', 'question'] as const;
+export const TICKET_SOURCES = ['web', 'portal', 'email', 'api', 'phone', 'chat'] as const;
+export const TICKET_IMPACTS = ['low', 'medium', 'high'] as const;
+export const TICKET_URGENCIES = ['low', 'medium', 'high'] as const;
 
 export type TicketCategory = typeof TICKET_CATEGORIES[number];
 export type TicketPriority = typeof TICKET_PRIORITIES[number];
 export type TicketStatus = typeof TICKET_STATUSES[number];
+export type TicketType = typeof TICKET_TYPES[number];
+export type TicketSource = typeof TICKET_SOURCES[number];
+
+// Support Queues (assignment groups, ServiceNow-style)
+export const supportQueues = pgTable("support_queues", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  name: text("name").notNull(),
+  description: text("description"),
+  emailAlias: text("email_alias"),
+  plannerBucketName: text("planner_bucket_name"),
+  defaultAssigneeId: varchar("default_assignee_id").references(() => users.id, { onDelete: 'set null' }),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_queues_tenant").on(table.tenantId),
+  uniqueTenantName: uniqueIndex("unique_support_queue_tenant_name").on(table.tenantId, table.name),
+}));
+export const insertSupportQueueSchema = createInsertSchema(supportQueues).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSupportQueue = z.infer<typeof insertSupportQueueSchema>;
+export type SupportQueue = typeof supportQueues.$inferSelect;
+
+// SLA Policies
+export const supportSlaPolicies = pgTable("support_sla_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  name: text("name").notNull(),
+  priority: text("priority").notNull(),
+  ticketType: text("ticket_type"),
+  firstResponseMinutes: integer("first_response_minutes").notNull().default(60),
+  resolutionMinutes: integer("resolution_minutes").notNull().default(1440),
+  businessHoursOnly: boolean("business_hours_only").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_sla_tenant").on(table.tenantId),
+}));
+export const insertSupportSlaPolicySchema = createInsertSchema(supportSlaPolicies).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSupportSlaPolicy = z.infer<typeof insertSupportSlaPolicySchema>;
+export type SupportSlaPolicy = typeof supportSlaPolicies.$inferSelect;
+
+// Knowledge Base Articles
+export const supportKbArticles = pgTable("support_kb_articles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  title: text("title").notNull(),
+  slug: varchar("slug", { length: 255 }).notNull(),
+  body: text("body").notNull(),
+  summary: text("summary"),
+  visibility: text("visibility").notNull().default("internal"),
+  tags: text("tags").array(),
+  authorId: varchar("author_id").references(() => users.id, { onDelete: 'set null' }),
+  publishedAt: timestamp("published_at"),
+  viewCount: integer("view_count").notNull().default(0),
+  helpfulCount: integer("helpful_count").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_kb_tenant").on(table.tenantId),
+  uniqueTenantSlug: uniqueIndex("unique_support_kb_tenant_slug").on(table.tenantId, table.slug),
+}));
+export const insertSupportKbArticleSchema = createInsertSchema(supportKbArticles, {
+  tags: z.array(z.string()).optional(),
+}).omit({ id: true, createdAt: true, updatedAt: true, viewCount: true, helpfulCount: true });
+export type InsertSupportKbArticle = z.infer<typeof insertSupportKbArticleSchema>;
+export type SupportKbArticle = typeof supportKbArticles.$inferSelect;
+
+// App Integration Keys (for SYNOZUR apps to file tickets via API)
+export const supportAppIntegrationKeys = pgTable("support_app_integration_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  applicationName: text("application_name").notNull(),
+  description: text("description"),
+  keyPrefix: varchar("key_prefix", { length: 16 }).notNull(),
+  keyHash: text("key_hash").notNull(),
+  defaultQueueId: varchar("default_queue_id").references(() => supportQueues.id, { onDelete: 'set null' }),
+  defaultTicketType: text("default_ticket_type").default("incident"),
+  scopes: text("scopes").array(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_app_keys_tenant").on(table.tenantId),
+  prefixIdx: index("idx_support_app_keys_prefix").on(table.keyPrefix),
+}));
+export const insertSupportAppIntegrationKeySchema = createInsertSchema(supportAppIntegrationKeys, {
+  scopes: z.array(z.string()).optional(),
+}).omit({ id: true, createdAt: true, lastUsedAt: true, revokedAt: true });
+export type InsertSupportAppIntegrationKey = z.infer<typeof insertSupportAppIntegrationKeySchema>;
+export type SupportAppIntegrationKey = typeof supportAppIntegrationKeys.$inferSelect;
 
 export const supportTickets = pgTable("support_tickets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   ticketNumber: integer("ticket_number").notNull(),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null' }),
   category: text("category").notNull(),
   subject: text("subject").notNull(),
   description: text("description").notNull(),
   priority: text("priority").notNull().default("medium"),
-  status: text("status").notNull().default("open"),
+  status: text("status").notNull().default("new"),
   assignedTo: varchar("assigned_to").references(() => users.id, { onDelete: 'set null' }),
   metadata: jsonb("metadata"),
   applicationSource: text("application_source").notNull().default("Constellation"),
@@ -3122,7 +3220,34 @@ export const supportTickets = pgTable("support_tickets", {
   updatedAt: timestamp("updated_at").default(sql`now()`).notNull(),
   resolvedAt: timestamp("resolved_at"),
   resolvedBy: varchar("resolved_by").references(() => users.id, { onDelete: 'set null' }),
-});
+  // ITSM extensions
+  ticketType: text("ticket_type").notNull().default("incident"),
+  source: text("source").notNull().default("web"),
+  impact: text("impact"),
+  urgency: text("urgency"),
+  queueId: varchar("queue_id").references(() => supportQueues.id, { onDelete: 'set null' }),
+  slaPolicyId: varchar("sla_policy_id").references(() => supportSlaPolicies.id, { onDelete: 'set null' }),
+  firstResponseDueAt: timestamp("first_response_due_at"),
+  firstResponseAt: timestamp("first_response_at"),
+  resolutionDueAt: timestamp("resolution_due_at"),
+  slaBreached: boolean("sla_breached").notNull().default(false),
+  closedAt: timestamp("closed_at"),
+  // External requester (for tickets not tied to an internal user)
+  externalRequesterEmail: text("external_requester_email"),
+  externalRequesterName: text("external_requester_name"),
+  // Magic-link token for portal access
+  portalToken: varchar("portal_token", { length: 64 }),
+  // App integration (when filed via API)
+  appIntegrationKeyId: varchar("app_integration_key_id").references(() => supportAppIntegrationKeys.id, { onDelete: 'set null' }),
+  // CSAT
+  csatScore: integer("csat_score"),
+  csatComment: text("csat_comment"),
+  csatSubmittedAt: timestamp("csat_submitted_at"),
+}, (table) => ({
+  portalTokenIdx: index("idx_support_tickets_portal_token").on(table.portalToken),
+  queueIdx: index("idx_support_tickets_queue").on(table.queueId),
+  statusIdx: index("idx_support_tickets_status").on(table.status),
+}));
 
 export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit({
   id: true,
@@ -3176,6 +3301,39 @@ export const insertSupportTicketPlannerSyncSchema = createInsertSchema(supportTi
 });
 export type InsertSupportTicketPlannerSync = z.infer<typeof insertSupportTicketPlannerSyncSchema>;
 export type SupportTicketPlannerSync = typeof supportTicketPlannerSync.$inferSelect;
+
+// Watchers (CC) on a ticket — by user OR external email
+export const supportTicketWatchers = pgTable("support_ticket_watchers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'cascade' }),
+  externalEmail: text("external_email"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  ticketIdx: index("idx_support_watchers_ticket").on(table.ticketId),
+}));
+export const insertSupportTicketWatcherSchema = createInsertSchema(supportTicketWatchers).omit({ id: true, createdAt: true });
+export type InsertSupportTicketWatcher = z.infer<typeof insertSupportTicketWatcherSchema>;
+export type SupportTicketWatcher = typeof supportTicketWatchers.$inferSelect;
+
+// Audit log of state/assignment changes — ServiceNow-like activity feed
+export const supportTicketActivity = pgTable("support_ticket_activity", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: 'set null' }),
+  actorLabel: text("actor_label"),
+  action: text("action").notNull(),
+  fieldName: text("field_name"),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  note: text("note"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  ticketIdx: index("idx_support_activity_ticket").on(table.ticketId),
+}));
+export const insertSupportTicketActivitySchema = createInsertSchema(supportTicketActivity).omit({ id: true, createdAt: true });
+export type InsertSupportTicketActivity = z.infer<typeof insertSupportTicketActivitySchema>;
+export type SupportTicketActivity = typeof supportTicketActivity.$inferSelect;
 
 // ============================================================================
 // CRM INTEGRATION TABLES (Provider-agnostic, tenant-scoped)

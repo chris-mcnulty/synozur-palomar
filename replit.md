@@ -98,3 +98,15 @@ Multi-tenant user model: A user in one tenant can be a client in another tenant,
 - **Airport Codes**: IATA 3-letter code database.
 - **Exchange Rates**: Open Exchange Rates API.
 - **HubSpot CRM Integration**: HubSpot API for Deals, Companies, Contacts, and activity logging.
+
+## Support Platform (ServiceNow-Style)
+
+A multi-tenant support system layered on top of the existing `supportTickets` infrastructure:
+
+- **Schema** (`shared/schema.ts`): Adds `supportQueues`, `supportSlaPolicies`, `supportKbArticles`, `supportAppIntegrationKeys`, `supportTicketWatchers`, `supportTicketActivity`. Tickets gained `ticketType`, `source`, `queueId`, `slaPolicyId`, `firstResponse*`, `resolutionDueAt`, `slaBreached`, `closedAt`, `externalRequester{Email,Name}`, `portalToken`, `appIntegrationKeyId`, CSAT fields. `userId` is nullable so tickets can be filed by external (non-user) requesters.
+- **Internal API** (`server/routes/support.ts`): Authenticated CRUD for staff. Creates tickets with portal tokens and applies the matching SLA policy.
+- **External API** (`server/routes/support-external.ts`): Bearer/API-key authenticated endpoints for other SYNOZUR apps to file/read tickets. Keys are minted via `mintApiKey()` (`syn_<prefix>.<secret>`), stored sha256-hashed and prefix-indexed.
+- **Public Portal** (`server/routes/support-portal.ts`): Token-protected magic-link access (`/portal/ticket/:token`) — no login. Supports lookup-by-number+email, replies, CSAT, and anonymous ticket creation. Rate-limited; PII (requester email, field-level diffs) excluded from public payloads.
+- **Admin Routes** (`server/routes/support-admin.ts`): Tenant-scoped CRUD for queues, SLA policies, KB articles, API keys, watchers, and activity. All ticket-scoped routes verify tenant ownership before responding.
+- **Inbound Email** (`/api/support/email-inbound`): Authenticates via API key OR HMAC signature (`X-Inbound-Signature` over body using `SUPPORT_INBOUND_EMAIL_SECRET`); tenant always derived from credentials, never the request body.
+- **Frontend**: `client/src/pages/portal-lookup.tsx` (find-my-ticket form) and `client/src/pages/portal-ticket.tsx` (status, conversation, CSAT). Registered as `/portal` and `/portal/ticket/:token` in `App.tsx` outside the auth gate.

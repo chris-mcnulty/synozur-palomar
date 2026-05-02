@@ -37,6 +37,24 @@ import {
   supportTicketPlannerSync,
   type SupportTicketPlannerSync,
   type InsertSupportTicketPlannerSync,
+  supportQueues,
+  type SupportQueue,
+  type InsertSupportQueue,
+  supportSlaPolicies,
+  type SupportSlaPolicy,
+  type InsertSupportSlaPolicy,
+  supportKbArticles,
+  type SupportKbArticle,
+  type InsertSupportKbArticle,
+  supportAppIntegrationKeys,
+  type SupportAppIntegrationKey,
+  type InsertSupportAppIntegrationKey,
+  supportTicketWatchers,
+  type SupportTicketWatcher,
+  type InsertSupportTicketWatcher,
+  supportTicketActivity,
+  type SupportTicketActivity,
+  type InsertSupportTicketActivity,
   crmConnections,
   type CrmConnection,
   type InsertCrmConnection,
@@ -61,7 +79,7 @@ import {
 } from "@shared/schema";
 import { db } from "../db";
 import type { IStorage } from "./index";
-import { eq, ne, desc, and, or, gte, lte, sql, isNotNull, isNull, inArray, type SQL } from "drizzle-orm";
+import { eq, ne, desc, and, or, gte, lte, sql, isNotNull, isNull, inArray, ilike, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 const raiddOwnerAlias = alias(users, 'raidd_owner');
@@ -1240,5 +1258,172 @@ export const adminMethods: ThisType<IStorage & {
       .where(lte(agentCardHealthChecks.checkedAt, cutoff))
       .returning({ id: agentCardHealthChecks.id });
     return result.length;
+  },
+
+  // ===== Support Queues =====
+  async getSupportQueues(tenantId: string): Promise<SupportQueue[]> {
+    return db.select().from(supportQueues)
+      .where(eq(supportQueues.tenantId, tenantId))
+      .orderBy(supportQueues.sortOrder, supportQueues.name);
+  },
+  async getSupportQueueById(id: string): Promise<SupportQueue | undefined> {
+    const [q] = await db.select().from(supportQueues).where(eq(supportQueues.id, id));
+    return q;
+  },
+  async createSupportQueue(q: InsertSupportQueue): Promise<SupportQueue> {
+    const [created] = await db.insert(supportQueues).values(q).returning();
+    return created;
+  },
+  async updateSupportQueue(id: string, updates: Partial<InsertSupportQueue>): Promise<SupportQueue> {
+    const [updated] = await db.update(supportQueues)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(supportQueues.id, id)).returning();
+    return updated;
+  },
+  async deleteSupportQueue(id: string): Promise<void> {
+    await db.delete(supportQueues).where(eq(supportQueues.id, id));
+  },
+
+  // ===== SLA Policies =====
+  async getSupportSlaPolicies(tenantId: string): Promise<SupportSlaPolicy[]> {
+    return db.select().from(supportSlaPolicies)
+      .where(eq(supportSlaPolicies.tenantId, tenantId))
+      .orderBy(supportSlaPolicies.priority);
+  },
+  async getSupportSlaPolicyById(id: string): Promise<SupportSlaPolicy | undefined> {
+    const [p] = await db.select().from(supportSlaPolicies).where(eq(supportSlaPolicies.id, id));
+    return p;
+  },
+  async findMatchingSlaPolicy(tenantId: string, priority: string, ticketType?: string): Promise<SupportSlaPolicy | undefined> {
+    const rows = await db.select().from(supportSlaPolicies).where(and(
+      eq(supportSlaPolicies.tenantId, tenantId),
+      eq(supportSlaPolicies.priority, priority),
+      eq(supportSlaPolicies.isActive, true),
+    ));
+    if (ticketType) {
+      const exact = rows.find(r => r.ticketType === ticketType);
+      if (exact) return exact;
+    }
+    return rows.find(r => !r.ticketType) || rows[0];
+  },
+  async createSupportSlaPolicy(p: InsertSupportSlaPolicy): Promise<SupportSlaPolicy> {
+    const [created] = await db.insert(supportSlaPolicies).values(p).returning();
+    return created;
+  },
+  async updateSupportSlaPolicy(id: string, updates: Partial<InsertSupportSlaPolicy>): Promise<SupportSlaPolicy> {
+    const [updated] = await db.update(supportSlaPolicies)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(supportSlaPolicies.id, id)).returning();
+    return updated;
+  },
+  async deleteSupportSlaPolicy(id: string): Promise<void> {
+    await db.delete(supportSlaPolicies).where(eq(supportSlaPolicies.id, id));
+  },
+
+  // ===== KB Articles =====
+  async getSupportKbArticles(tenantId: string, opts?: { visibility?: string; published?: boolean; search?: string }): Promise<SupportKbArticle[]> {
+    const conds: SQL[] = [eq(supportKbArticles.tenantId, tenantId)];
+    if (opts?.visibility) conds.push(eq(supportKbArticles.visibility, opts.visibility));
+    if (opts?.published) conds.push(isNotNull(supportKbArticles.publishedAt));
+    if (opts?.search) conds.push(ilike(supportKbArticles.title, `%${opts.search}%`));
+    return db.select().from(supportKbArticles).where(and(...conds)).orderBy(desc(supportKbArticles.updatedAt));
+  },
+  async getSupportKbArticleBySlug(tenantId: string, slug: string): Promise<SupportKbArticle | undefined> {
+    const [a] = await db.select().from(supportKbArticles)
+      .where(and(eq(supportKbArticles.tenantId, tenantId), eq(supportKbArticles.slug, slug)));
+    return a;
+  },
+  async getSupportKbArticleById(id: string): Promise<SupportKbArticle | undefined> {
+    const [a] = await db.select().from(supportKbArticles).where(eq(supportKbArticles.id, id));
+    return a;
+  },
+  async createSupportKbArticle(a: InsertSupportKbArticle): Promise<SupportKbArticle> {
+    const [created] = await db.insert(supportKbArticles).values(a).returning();
+    return created;
+  },
+  async updateSupportKbArticle(id: string, updates: Partial<InsertSupportKbArticle>): Promise<SupportKbArticle> {
+    const [updated] = await db.update(supportKbArticles)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(supportKbArticles.id, id)).returning();
+    return updated;
+  },
+  async deleteSupportKbArticle(id: string): Promise<void> {
+    await db.delete(supportKbArticles).where(eq(supportKbArticles.id, id));
+  },
+  async incrementKbArticleViewCount(id: string): Promise<void> {
+    await db.update(supportKbArticles)
+      .set({ viewCount: sql`${supportKbArticles.viewCount} + 1` })
+      .where(eq(supportKbArticles.id, id));
+  },
+
+  // ===== App Integration Keys =====
+  async getSupportAppIntegrationKeys(tenantId: string): Promise<SupportAppIntegrationKey[]> {
+    return db.select().from(supportAppIntegrationKeys)
+      .where(eq(supportAppIntegrationKeys.tenantId, tenantId))
+      .orderBy(desc(supportAppIntegrationKeys.createdAt));
+  },
+  async getSupportAppIntegrationKeyById(id: string): Promise<SupportAppIntegrationKey | undefined> {
+    const [k] = await db.select().from(supportAppIntegrationKeys).where(eq(supportAppIntegrationKeys.id, id));
+    return k;
+  },
+  async getSupportAppIntegrationKeysByPrefix(prefix: string): Promise<SupportAppIntegrationKey[]> {
+    return db.select().from(supportAppIntegrationKeys).where(eq(supportAppIntegrationKeys.keyPrefix, prefix));
+  },
+  async createSupportAppIntegrationKey(k: InsertSupportAppIntegrationKey): Promise<SupportAppIntegrationKey> {
+    const [created] = await db.insert(supportAppIntegrationKeys).values(k).returning();
+    return created;
+  },
+  async revokeSupportAppIntegrationKey(id: string): Promise<void> {
+    await db.update(supportAppIntegrationKeys)
+      .set({ revokedAt: new Date() })
+      .where(eq(supportAppIntegrationKeys.id, id));
+  },
+  async touchSupportAppIntegrationKey(id: string): Promise<void> {
+    await db.update(supportAppIntegrationKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(supportAppIntegrationKeys.id, id));
+  },
+
+  // ===== Watchers & Activity =====
+  async getSupportTicketWatchers(ticketId: string): Promise<SupportTicketWatcher[]> {
+    return db.select().from(supportTicketWatchers).where(eq(supportTicketWatchers.ticketId, ticketId));
+  },
+  async addSupportTicketWatcher(w: InsertSupportTicketWatcher): Promise<SupportTicketWatcher> {
+    const [created] = await db.insert(supportTicketWatchers).values(w).returning();
+    return created;
+  },
+  async removeSupportTicketWatcher(id: string): Promise<void> {
+    await db.delete(supportTicketWatchers).where(eq(supportTicketWatchers.id, id));
+  },
+
+  async getSupportTicketActivity(ticketId: string): Promise<SupportTicketActivity[]> {
+    return db.select().from(supportTicketActivity)
+      .where(eq(supportTicketActivity.ticketId, ticketId))
+      .orderBy(supportTicketActivity.createdAt);
+  },
+  async logSupportTicketActivity(a: InsertSupportTicketActivity): Promise<SupportTicketActivity> {
+    const [created] = await db.insert(supportTicketActivity).values(a).returning();
+    return created;
+  },
+
+  // ===== Portal Token Lookup =====
+  async getSupportTicketByPortalToken(token: string): Promise<SupportTicket | undefined> {
+    const [t] = await db.select().from(supportTickets).where(eq(supportTickets.portalToken, token));
+    return t;
+  },
+  async getSupportTicketByNumberAndEmail(tenantId: string, ticketNumber: number, email: string): Promise<SupportTicket | undefined> {
+    const lower = email.toLowerCase();
+    const rows = await db.select().from(supportTickets).where(and(
+      eq(supportTickets.tenantId, tenantId),
+      eq(supportTickets.ticketNumber, ticketNumber),
+    )).limit(1);
+    const t = rows[0];
+    if (!t) return undefined;
+    if (t.externalRequesterEmail && t.externalRequesterEmail.toLowerCase() === lower) return t;
+    if (t.userId) {
+      const [u] = await db.select().from(users).where(eq(users.id, t.userId));
+      if (u?.email?.toLowerCase() === lower) return t;
+    }
+    return undefined;
   },
 };

@@ -5,6 +5,41 @@ const APP_URL = process.env.APP_PUBLIC_URL || 'https://constellation.synozur.com
 
 const SUPPORT_NOTIFICATION_EMAIL = "Constellation@synozur.com";
 
+function buildPortalUrl(ticket: SupportTicket): string {
+  if (ticket.portalToken) return `${APP_URL}/portal/ticket/${ticket.portalToken}`;
+  return `${APP_URL}/support`;
+}
+
+export async function sendExternalTicketConfirmation(
+  ticket: SupportTicket,
+  requester: { email: string; name?: string },
+  portalUrl: string,
+) {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const name = requester.name || "there";
+  const msg = {
+    to: requester.email,
+    from: fromEmail,
+    subject: `[Synozur Support] Ticket #${ticket.ticketNumber} received`,
+    html: `
+      <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #1d4ed8; color: #fff; padding: 24px;">
+          <h2 style="margin:0;">Support ticket #${ticket.ticketNumber}</h2>
+          <div style="opacity:.85; font-size:13px;">${ticket.applicationSource}</div>
+        </div>
+        <div style="padding: 20px; background: #fff;">
+          <p>Hi ${name},</p>
+          <p>We've received your request. Subject: <strong>${ticket.subject}</strong></p>
+          <p>You can view the status, add comments, and provide feedback at any time:</p>
+          <p><a href="${portalUrl}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open your ticket portal</a></p>
+          <p style="color:#666;font-size:12px;">This link is private — keep it like a password. You'll get more email when our team responds.</p>
+        </div>
+      </div>
+    `,
+  };
+  await client.send(msg);
+}
+
 export async function sendSupportTicketNotification(
   ticket: SupportTicket,
   user: { email: string; firstName?: string | null; lastName?: string | null }
@@ -93,7 +128,7 @@ export async function sendTicketConfirmationToSubmitter(
                         <tr><td style="padding: 10px 14px; font-size: 13px; color: #666;">Priority</td><td style="padding: 10px 14px; font-size: 13px; color: #333;">${(ticket.priority || 'medium').charAt(0).toUpperCase() + (ticket.priority || 'medium').slice(1)}</td></tr>
                       </table>
                       <p style="margin: 0 0 20px; font-size: 14px; color: #333;">You can track your ticket status and add updates anytime:</p>
-                      <a href="${APP_URL}/support" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View Your Ticket</a>
+                      <a href="${buildPortalUrl(ticket)}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View Your Ticket</a>
                       <p style="margin: 20px 0 0; font-size: 13px; color: #888;">You'll receive another email when your ticket is resolved.</p>
                     </td>
                   </tr>
