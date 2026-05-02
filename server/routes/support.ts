@@ -1,7 +1,10 @@
 import type { Express } from "express";
 import { z } from "zod";
+import crypto from "crypto";
 import { storage } from "../storage";
-import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES } from "@shared/schema";
+import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES } from "@shared/schema";
+
+const s = storage as any;
 
 interface SupportRouteDeps {
   requireAuth: any;
@@ -13,6 +16,8 @@ const createTicketSchema = z.object({
   subject: z.string().min(3),
   description: z.string().min(10),
   priority: z.enum(TICKET_PRIORITIES).default("medium"),
+  ticketType: z.enum(TICKET_TYPES).optional(),
+  queueId: z.string().optional(),
   metadata: z.record(z.any()).optional(),
 });
 
@@ -47,8 +52,9 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
         return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
       }
 
-      const { category, subject, description, priority, metadata } = parsed.data;
+      const { category, subject, description, priority, ticketType, queueId, metadata } = parsed.data;
       const tenantId = (req as any).tenantId || user.tenantId;
+      const portalToken = crypto.randomBytes(24).toString("hex");
 
       const ticket = await storage.createSupportTicket({
         tenantId,
@@ -59,7 +65,26 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
         priority,
         metadata: metadata || null,
         applicationSource: 'Constellation',
-      });
+        ticketType: ticketType || 'incident',
+        source: 'web',
+        queueId: queueId || null,
+        portalToken,
+        status: 'new',
+      } as any);
+
+      // Apply SLA
+      try {
+        const policy = await s.findMatchingSlaPolicy(tenantId, priority, ticketType || 'incident');
+        if (policy) {
+          const now = new Date();
+          await s.updateSupportTicket(ticket.id, {
+            slaPolicyId: policy.id,
+            firstResponseDueAt: new Date(now.getTime() + policy.firstResponseMinutes * 60_000) as any,
+            resolutionDueAt: new Date(now.getTime() + policy.resolutionMinutes * 60_000) as any,
+          });
+        }
+      } catch (e) { /* non-fatal */ }
+      try { await s.logSupportTicketActivity({ ticketId: ticket.id, actorUserId: user.id, action: 'created' }); } catch {}
 
       try {
         const { sendSupportTicketNotification, sendTicketConfirmationToSubmitter } = await import("../email-support");
