@@ -115,33 +115,78 @@ export function isBounceOrAutoReply(input: {
   return { skip: false };
 }
 
+/**
+ * Resolve tenant-branding bits used by outbound mail templates. Best-effort —
+ * if the tenant lookup fails, we fall back to platform defaults.
+ */
+async function getTenantBranding(tenantId: string | null | undefined): Promise<{
+  name: string | null;
+  primaryColor: string;
+  logoUrl: string | null;
+  fromEmail: string | null;
+  fromName: string | null;
+  replyDomain: string | null;
+}> {
+  const fallback = { name: null, primaryColor: "#1d4ed8", logoUrl: null, fromEmail: null, fromName: null, replyDomain: null };
+  if (!tenantId) return fallback;
+  try {
+    const { storage } = await import("./storage");
+    const t: any = await (storage as any).getTenant?.(tenantId);
+    if (!t) return fallback;
+    return {
+      name: t.name || null,
+      primaryColor: t.branding?.primaryColor || t.color || "#1d4ed8",
+      logoUrl: t.logoUrl || null,
+      fromEmail: t.supportFromEmail || null,
+      fromName: t.supportFromName || null,
+      replyDomain: t.supportReplyDomain || null,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function brandingHeaderHtml(name: string | null, color: string, logoUrl: string | null, ticketNumber: number, application: string | null) {
+  const display = name || "Support";
+  const logo = logoUrl
+    ? `<img src="${logoUrl}" alt="${display}" style="max-height:32px;display:block;margin-bottom:8px;">`
+    : "";
+  return `
+    <div style="background: ${color}; color: #fff; padding: 24px;">
+      ${logo}
+      <h2 style="margin:0;">${display} ticket #${ticketNumber}</h2>
+      ${application ? `<div style="opacity:.85; font-size:13px;">${application}</div>` : ""}
+    </div>
+  `;
+}
+
 export async function sendExternalTicketConfirmation(
   ticket: SupportTicket,
   requester: { email: string; name?: string },
   portalUrl: string,
 ) {
-  const { client, fromEmail } = await getUncachableSendGridClient();
+  const { client, fromEmail: defaultFromEmail } = await getUncachableSendGridClient();
+  const brand = await getTenantBranding(ticket.tenantId);
+  const fromEmail = brand.fromEmail || defaultFromEmail;
+  const fromName = brand.fromName || (brand.name ? `${brand.name} Support` : "Synozur Support");
   const name = requester.name || "there";
   const msg = {
     to: requester.email,
-    from: fromEmail,
-    subject: `[Synozur Support] Ticket #${ticket.ticketNumber} received`,
+    from: { email: fromEmail, name: fromName },
+    subject: `[${brand.name || "Support"}] Ticket #${ticket.ticketNumber} received`,
     html: `
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background: #1d4ed8; color: #fff; padding: 24px;">
-          <h2 style="margin:0;">Support ticket #${ticket.ticketNumber}</h2>
-          <div style="opacity:.85; font-size:13px;">${ticket.applicationSource}</div>
-        </div>
+        ${brandingHeaderHtml(brand.name, brand.primaryColor, brand.logoUrl, ticket.ticketNumber, ticket.applicationSource)}
         <div style="padding: 20px; background: #fff;">
           <p>Hi ${name},</p>
           <p>We've received your request. Subject: <strong>${ticket.subject}</strong></p>
           <p>You can view the status, add comments, and provide feedback at any time:</p>
-          <p><a href="${portalUrl}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open your ticket portal</a></p>
+          <p><a href="${portalUrl}" style="display:inline-block;background:${brand.primaryColor};color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open your ticket portal</a></p>
           <p style="color:#666;font-size:12px;">This link is private — keep it like a password. You'll get more email when our team responds.</p>
         </div>
       </div>
     `,
-  };
+  } as any;
   await client.send(msg);
 }
 
@@ -387,6 +432,12 @@ export async function sendStaffReplyEmail(input: StaffReplyEmailInput): Promise<
   const subject = `Re: ${subjectPrefix}${input.ticket.subject}`;
   const portalUrl = buildPortalUrl(input.ticket);
   const fromHeaderName = input.fromName || (input.tenantName ? `${input.tenantName} Support` : "Synozur Support");
+  // Per-tenant primary color + logo for branded outbound mail. Best-effort.
+  const brand = await getTenantBranding(input.ticket.tenantId);
+  const primaryColor = brand.primaryColor;
+  const logoHtml = brand.logoUrl
+    ? `<img src="${brand.logoUrl}" alt="${input.tenantName || brand.name || "Support"}" style="max-height:24px;display:block;margin-bottom:6px;">`
+    : "";
   const safeBody = input.reply.message.replace(/\r\n/g, "\n");
   const htmlBody = safeBody
     .split("\n")
@@ -415,8 +466,8 @@ export async function sendStaffReplyEmail(input: StaffReplyEmailInput): Promise<
     headers,
     html: `
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 640px; margin: 0 auto;">
-        <div style="padding: 16px 20px; background: #1d4ed8; color: #fff;">
-          <strong>Ticket #${input.ticket.ticketNumber}</strong>
+        <div style="padding: 16px 20px; background: ${primaryColor}; color: #fff;">
+          ${logoHtml}<strong>Ticket #${input.ticket.ticketNumber}</strong>
           <span style="opacity:.85;"> &middot; ${input.ticket.subject}</span>
         </div>
         <div style="padding: 20px; background: #fff; color: #1f2937; line-height:1.5; font-size:14px;">
@@ -425,7 +476,7 @@ export async function sendStaffReplyEmail(input: StaffReplyEmailInput): Promise<
           <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
           <div style="font-size:12px;color:#6b7280;">
             Reply directly to this email to update your ticket, or
-            <a href="${portalUrl}" style="color:#1d4ed8;">open the ticket portal</a>.
+            <a href="${portalUrl}" style="color:${primaryColor};">open the ticket portal</a>.
           </div>
         </div>
       </div>

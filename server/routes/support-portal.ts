@@ -2,18 +2,13 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_TYPES } from "@shared/schema";
+import { rateLimitDb, getClientIp } from "../lib/support-ratelimit";
 
 const s = storage as any;
 
-// Simple in-memory rate limiter for public lookup endpoints (per-IP, sliding window).
-const lookupRateBuckets = new Map<string, number[]>();
-function rateLimit(ip: string, max: number, windowMs: number): boolean {
-  const now = Date.now();
-  const arr = (lookupRateBuckets.get(ip) || []).filter(t => now - t < windowMs);
-  if (arr.length >= max) { lookupRateBuckets.set(ip, arr); return false; }
-  arr.push(now);
-  lookupRateBuckets.set(ip, arr);
-  return true;
+// DB-backed sliding-window limiter — durable across restarts and instances.
+async function rateLimit(key: string, max: number, windowMs: number): Promise<boolean> {
+  return rateLimitDb(key, max, windowMs);
 }
 
 // Resolve a tenant from the request. Explicit `tenantId` (query/body) wins.
@@ -95,8 +90,8 @@ export function registerSupportPortalRoutes(app: Express) {
   // Lookup by ticket # + email (no token, e.g. user lost their link)
   app.post("/api/portal/lookup", async (req: Request, res: Response) => {
     try {
-      const ip = (req.ip || req.headers["x-forwarded-for"] || "unknown").toString();
-      if (!rateLimit(`lookup:${ip}`, 10, 60_000)) {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`lookup:${ip}`, 10, 60_000))) {
         return res.status(429).json({ error: "Too many requests. Please wait a minute." });
       }
       const body = z.object({
@@ -209,8 +204,8 @@ export function registerSupportPortalRoutes(app: Express) {
   // a tenant context derived from request host or explicit tenantId param.
   app.post("/api/portal/tickets", async (req: Request, res: Response) => {
     try {
-      const ip = (req.ip || req.headers["x-forwarded-for"] || "unknown").toString();
-      if (!rateLimit(`create:${ip}`, 5, 60_000)) {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`create:${ip}`, 5, 60_000))) {
         return res.status(429).json({ error: "Too many requests. Please wait a minute." });
       }
       const body = z.object({
@@ -300,6 +295,49 @@ export function registerSupportPortalRoutes(app: Express) {
     }
   });
 
+  // Single bootstrap call for the portal SPA — returns everything the portal
+  // needs to brand itself plus public capabilities. Cheaper and atomic vs
+  // multiple round-trips.
+  app.get("/api/portal/bootstrap", async (req: Request, res: Response) => {
+    try {
+      const tenantId = await resolveTenantId(req, (req.query.tenantId as string) || null);
+      if (!tenantId) return res.status(404).json({ error: "Tenant not found" });
+      const t = await s.getTenant(tenantId);
+      if (!t) return res.status(404).json({ error: "Tenant not found" });
+      const primaryColor = t.branding?.primaryColor || t.color || null;
+      const tenantName = t.name || "Support";
+      const supportEmail = t.supportFromEmail || null;
+      const fromName = t.supportFromName || `${tenantName} Support`;
+      const pageTitle = (t.branding as any)?.portalPageTitle || `${tenantName} Help Center`;
+      return res.json({
+        tenant: {
+          id: t.id,
+          name: tenantName,
+          slug: t.slug,
+          logoUrl: t.logoUrl || null,
+          logoUrlDark: t.logoUrlDark || null,
+          primaryColor,
+          color: t.color || null,
+        },
+        branding: {
+          primaryColor,
+          logoUrl: t.logoUrl || null,
+          pageTitle,
+          fromName,
+          supportEmail,
+        },
+        capabilities: {
+          publicTickets: true,
+          kbEnabled: true,
+          csat: true,
+        },
+      });
+    } catch (err: any) {
+      console.error("[PORTAL] bootstrap failed:", err);
+      return res.status(500).json({ error: "Failed to load portal bootstrap" });
+    }
+  });
+
   // Public KB list (only published+public articles)
   app.get("/api/portal/kb", async (req: Request, res: Response) => {
     try {
@@ -357,8 +395,8 @@ export function registerSupportPortalRoutes(app: Express) {
   // Per-article thumbs up/down feedback (rate-limited per IP+article)
   app.post("/api/portal/kb/:id/feedback", async (req: Request, res: Response) => {
     try {
-      const ip = (req.ip || req.headers["x-forwarded-for"] || "unknown").toString();
-      if (!rateLimit(`kbfb:${ip}:${req.params.id}`, 3, 60_000)) {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`kbfb:${ip}:${req.params.id}`, 3, 60_000))) {
         return res.status(429).json({ error: "Too many requests" });
       }
       const body = z.object({
@@ -386,8 +424,8 @@ export function registerSupportPortalRoutes(app: Express) {
   // Generic portal analytics event (deflection, etc.)
   app.post("/api/portal/events", async (req: Request, res: Response) => {
     try {
-      const ip = (req.ip || req.headers["x-forwarded-for"] || "unknown").toString();
-      if (!rateLimit(`evt:${ip}`, 30, 60_000)) {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`evt:${ip}`, 30, 60_000))) {
         return res.status(429).json({ error: "Too many requests" });
       }
       const body = z.object({

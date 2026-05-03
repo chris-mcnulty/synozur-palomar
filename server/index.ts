@@ -137,6 +137,16 @@ process.on("uncaughtException", (error) => {
       }
     }
 
+    // Ensure Postgres FTS tsvector columns + GIN indexes exist on the support
+    // tables. Idempotent and safe to run on every boot.
+    try {
+      const { ensureSupportFtsObjects } = await import("./lib/support-fts-migration.js");
+      await ensureSupportFtsObjects();
+      log("✅ Support FTS objects ensured");
+    } catch (ftsError: any) {
+      log(`⚠️ Support FTS migration failed: ${ftsError.message}`);
+    }
+
     setupAdditionalServices(app, server, envValid).catch((error) => {
       log(`⚠️ Additional services setup failed: ${error.message}`);
     });

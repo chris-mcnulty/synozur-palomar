@@ -637,6 +637,36 @@ export const insertSupportTicketActivitySchema = createInsertSchema(supportTicke
 export type InsertSupportTicketActivity = z.infer<typeof insertSupportTicketActivitySchema>;
 export type SupportTicketActivity = typeof supportTicketActivity.$inferSelect;
 
+// ===== Saved Filters (per user, scoped to tenant) =====
+export const supportSavedFilters = pgTable("support_saved_filters", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  query: jsonb("query").notNull(),
+  isPinned: boolean("is_pinned").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  userIdx: index("support_saved_filters_user_idx").on(t.userId),
+}));
+export const insertSupportSavedFilterSchema = createInsertSchema(supportSavedFilters).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSupportSavedFilter = z.infer<typeof insertSupportSavedFilterSchema>;
+export type SupportSavedFilter = typeof supportSavedFilters.$inferSelect;
+
+// ===== Durable rate-limit buckets (sliding-window log) =====
+export const supportRateLimitBuckets = pgTable("support_rate_limit_buckets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  bucketKey: text("bucket_key").notNull(),
+  hitAt: timestamp("hit_at").notNull().defaultNow(),
+}, (t) => ({
+  keyTimeIdx: index("support_rl_key_time_idx").on(t.bucketKey, t.hitAt),
+}));
+export const insertSupportRateLimitBucketSchema = createInsertSchema(supportRateLimitBuckets).omit({ id: true, hitAt: true });
+export type InsertSupportRateLimitBucket = z.infer<typeof insertSupportRateLimitBucketSchema>;
+export type SupportRateLimitBucket = typeof supportRateLimitBuckets.$inferSelect;
+
 // ============================================================================
 // AGENT CARD HEALTH CHECKS, PAGE VIEWS
 // ============================================================================

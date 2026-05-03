@@ -78,3 +78,17 @@ Preferred communication style: Simple, everyday language.
 
 ## Forbidden Changes
 - Do NOT modify `vite.config.ts`, `server/vite.ts`, `drizzle.config.ts`, or `package.json` scripts. Use the package management tools to install dependencies.
+
+## Support Platform
+
+A multi-tenant support system layered on the slim consulting core:
+
+- **Schema** (`shared/schema.ts`): `supportQueues`, `supportSlaPolicies`, `supportKbArticles`, `supportAppIntegrationKeys`, `supportTicketWatchers`, `supportTicketActivity`, `supportSavedFilters`, `supportRateLimitBuckets`. Tickets carry `ticketType`, `source`, `queueId`, `slaPolicyId`, `firstResponse*`, `resolutionDueAt`, `slaBreached`, `closedAt`, `externalRequester{Email,Name}`, `portalToken`, `appIntegrationKeyId`, and CSAT fields.
+- **Internal API** (`server/routes/support.ts`): Authenticated CRUD for staff plus saved-filter CRUD, FTS search (`/api/support/search`), and analytics (`/api/support/analytics`, 60s in-process cache).
+- **External API** (`server/routes/support-external.ts`): Bearer/API-key authenticated endpoints for other SYNOZUR apps to file/read tickets, plus `/api/external/v1/support/metrics` returning `{ open, awaitingCustomer, breachRate7d }` scoped to the calling app key.
+- **Public Portal** (`server/routes/support-portal.ts`): Token-protected magic-link access (`/portal/ticket/:token`) plus `/api/portal/bootstrap` which returns tenant info and branding (`primaryColor`, `logoUrl`, `pageTitle`, `fromName`, `supportEmail`).
+- **Admin Routes** (`server/routes/support-admin.ts`): Tenant-scoped CRUD for queues, SLA policies, KB articles, API keys, watchers, and activity.
+- **Inbound Email** (`/api/support/email-inbound`): Authenticates via API key OR HMAC signature (`X-Inbound-Signature` over body using `SUPPORT_INBOUND_EMAIL_SECRET`); tenant always derived from credentials.
+- **Search & Observability**: Postgres FTS via generated `tsvector` columns + GIN indexes on `support_tickets` and `support_ticket_replies` (managed at boot by `server/lib/support-fts-migration.ts`). Analytics surface lives at `/support/analytics` (recharts) and consumes the cached endpoint above.
+- **Tenant Branding on Mail**: `server/email-support.ts` reads tenant `primaryColor`, `logoUrl`, `supportFromEmail`, and `supportFromName` for confirmation and staff-reply templates.
+- **Durable Rate Limiting**: `support_rate_limit_buckets` powers a Postgres sliding-window limiter (`server/lib/support-ratelimit.ts`) used across `/api/portal/*` (per-IP) and `/api/external/v1/*` (per-API-key prefix), replacing the in-memory Map.

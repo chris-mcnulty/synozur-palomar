@@ -794,4 +794,100 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       return res.status(500).json({ error: "Failed to sync existing tickets", message: error?.message });
     }
   });
+
+  // ===== Saved filters (per-user, scoped to user's tenant) =====
+  app.get("/api/support/saved-filters", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const filters = await s.getSupportSavedFilters(user.id, user.tenantId || null);
+    return res.json(filters);
+  });
+
+  const savedFilterSchema = z.object({
+    name: z.string().min(1).max(80),
+    query: z.record(z.any()),
+    isPinned: z.boolean().optional(),
+    sortOrder: z.number().int().optional(),
+  });
+
+  app.post("/api/support/saved-filters", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const parsed = savedFilterSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
+    // Tenant binding is server-side: never trust the client.
+    const created = await s.createSupportSavedFilter({
+      userId: user.id,
+      tenantId: user.tenantId || null,
+      name: parsed.data.name,
+      query: parsed.data.query,
+      isPinned: parsed.data.isPinned || false,
+      sortOrder: parsed.data.sortOrder || 0,
+    });
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/support/saved-filters/:id", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const parsed = savedFilterSchema.partial().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
+    const updated = await s.updateSupportSavedFilter(req.params.id, user.id, parsed.data);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    return res.json(updated);
+  });
+
+  app.delete("/api/support/saved-filters/:id", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    await s.deleteSupportSavedFilter(req.params.id, user.id);
+    return res.status(204).end();
+  });
+
+  // ===== Full-text search (Postgres tsvector) =====
+  app.get("/api/support/search", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const q = (req.query.q as string || "").trim();
+    if (!q || q.length < 2) return res.json({ tickets: [], replies: [] });
+    const isPlatformRole = isPlatformAdminUser(user);
+    // Platform admins can pass a tenantId to scope; everyone else is locked to their own tenant.
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
+    const [tickets, replies] = await Promise.all([
+      s.searchSupportTickets({ tenantId, q, limit }),
+      s.searchSupportTicketReplies({ tenantId, q, limit }),
+    ]);
+    return res.json({ tickets, replies });
+  });
+
+  // ===== Analytics (60s cache) =====
+  let analyticsCache = new Map<string, { at: number; data: any }>();
+  app.get("/api/support/analytics", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const isPlatformRole = isPlatformAdminUser(user);
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const key = `t:${tenantId || "__all__"}`;
+    const now = Date.now();
+    const hit = analyticsCache.get(key);
+    if (hit && now - hit.at < 60_000) {
+      res.setHeader("X-Cache", "HIT");
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.json(hit.data);
+    }
+    const data = await s.getSupportAnalytics(tenantId);
+    analyticsCache.set(key, { at: now, data });
+    // Drop old keys eventually
+    if (analyticsCache.size > 200) analyticsCache = new Map();
+    res.setHeader("X-Cache", "MISS");
+    res.setHeader("Cache-Control", "private, max-age=60");
+    return res.json(data);
+  });
 }

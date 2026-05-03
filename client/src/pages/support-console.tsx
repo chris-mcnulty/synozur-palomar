@@ -16,8 +16,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Loader2, Send, Inbox, AlertTriangle, Clock, Hourglass, CheckCircle2, UserCheck,
-  Users, Activity, BookOpen, Lock, Eye, Plus, X, Search, Hand,
+  Users, Activity, BookOpen, Lock, Eye, Plus, X, Search, Hand, Bookmark, Pin, Trash2, Save,
 } from "lucide-react";
+
+interface SavedFilter {
+  id: string;
+  name: string;
+  query: Record<string, string>;
+  isPinned: boolean;
+  sortOrder: number;
+}
 
 const SAVED_VIEWS = [
   { key: "my-open", label: "My open", icon: UserCheck },
@@ -185,6 +193,12 @@ function SavedViews({
   onSelectQueue,
   queues,
   counts,
+  savedFilters,
+  selectedSavedFilterId,
+  onSelectSavedFilter,
+  onDeleteSavedFilter,
+  onSaveCurrent,
+  canSaveCurrent,
 }: {
   selectedView: ViewKey;
   onSelect: (v: ViewKey) => void;
@@ -192,6 +206,12 @@ function SavedViews({
   onSelectQueue: (id: string | null) => void;
   queues: Queue[];
   counts: Record<string, number>;
+  savedFilters: SavedFilter[];
+  selectedSavedFilterId: string | null;
+  onSelectSavedFilter: (f: SavedFilter) => void;
+  onDeleteSavedFilter: (id: string) => void;
+  onSaveCurrent: () => void;
+  canSaveCurrent: boolean;
 }) {
   return (
     <ScrollArea className="h-full">
@@ -219,6 +239,46 @@ function SavedViews({
                 <Badge variant="secondary" className="text-xs">{counts[v.key]}</Badge>
               )}
             </button>
+          );
+        })}
+
+        <Separator className="my-2" />
+        <div className="flex items-center justify-between px-2 py-1">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">My filters</div>
+          <button
+            onClick={onSaveCurrent}
+            disabled={!canSaveCurrent}
+            data-testid="button-save-filter"
+            title="Save the current search/view as a personal filter"
+            className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+          >
+            <Save className="h-3 w-3" /> Save
+          </button>
+        </div>
+        {savedFilters.length === 0 && (
+          <div className="text-xs text-muted-foreground px-2 py-1">No saved filters yet.</div>
+        )}
+        {savedFilters.map((f) => {
+          const isActive = selectedSavedFilterId === f.id;
+          return (
+            <div key={f.id} className={`group flex items-center gap-1 rounded-md ${isActive ? "bg-accent text-accent-foreground" : ""}`}>
+              <button
+                onClick={() => onSelectSavedFilter(f)}
+                data-testid={`saved-filter-${f.id}`}
+                className="flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover-elevate text-left min-w-0"
+              >
+                {f.isPinned ? <Pin className="h-3.5 w-3.5 shrink-0" /> : <Bookmark className="h-3.5 w-3.5 shrink-0" />}
+                <span className="truncate">{f.name}</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDeleteSavedFilter(f.id); }}
+                data-testid={`delete-saved-filter-${f.id}`}
+                className="opacity-0 group-hover:opacity-100 px-1 text-muted-foreground hover:text-destructive"
+                title="Delete filter"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           );
         })}
 
@@ -843,8 +903,33 @@ export default function SupportConsole() {
   const [queueId, setQueueId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [selectedSavedFilterId, setSelectedSavedFilterId] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const isStaff = !!user && (isPlatformAdmin || hasAnyRole(['admin', 'billing-admin']));
+
+  const { data: savedFilters = [] } = useQuery<SavedFilter[]>({
+    queryKey: ["/api/support/saved-filters"],
+    enabled: isStaff,
+  });
+
+  const createSavedFilter = useMutation({
+    mutationFn: async (input: { name: string; query: Record<string, string> }) => {
+      return apiRequest("/api/support/saved-filters", { method: "POST", body: JSON.stringify(input) });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/support/saved-filters"] });
+      toast({ title: "Filter saved" });
+    },
+    onError: () => toast({ title: "Couldn't save filter", variant: "destructive" }),
+  });
+
+  const deleteSavedFilter = useMutation({
+    mutationFn: async (id: string) => apiRequest(`/api/support/saved-filters/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/support/saved-filters"] });
+    },
+  });
 
   const queryParams = useMemo(() => {
     const p = new URLSearchParams();
@@ -936,11 +1021,29 @@ export default function SupportConsole() {
         <div className="w-[220px] border-r shrink-0 hidden md:block">
           <SavedViews
             selectedView={view}
-            onSelect={setView}
+            onSelect={(v) => { setView(v); setSelectedSavedFilterId(null); }}
             selectedQueueId={queueId}
-            onSelectQueue={setQueueId}
+            onSelectQueue={(id) => { setQueueId(id); setSelectedSavedFilterId(null); }}
             queues={queues}
             counts={counts}
+            savedFilters={savedFilters}
+            selectedSavedFilterId={selectedSavedFilterId}
+            onSelectSavedFilter={(f) => {
+              setSelectedSavedFilterId(f.id);
+              if (typeof f.query.view === "string") setView(f.query.view as ViewKey);
+              if (typeof f.query.queueId === "string") setQueueId(f.query.queueId);
+              else setQueueId(null);
+              setSearch(typeof f.query.search === "string" ? f.query.search : "");
+            }}
+            onDeleteSavedFilter={(id) => deleteSavedFilter.mutate(id)}
+            onSaveCurrent={() => {
+              const name = window.prompt("Name this saved filter");
+              if (!name || !name.trim()) return;
+              const query: Record<string, string> = { view, search };
+              if (queueId) query.queueId = queueId;
+              createSavedFilter.mutate({ name: name.trim(), query });
+            }}
+            canSaveCurrent={!!view || !!queueId || !!search.trim()}
           />
         </div>
 

@@ -5,6 +5,7 @@ import {
   supportSlaPolicies, supportKbArticles, supportAppIntegrationKeys,
   supportTickets, supportTicketReplies, supportTicketPlannerSync,
   supportTicketWatchers, supportTicketActivity,
+  supportSavedFilters,
   agentCardHealthChecks,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
@@ -21,10 +22,11 @@ import {
   type SupportTicketPlannerSync, type InsertSupportTicketPlannerSync,
   type SupportTicketWatcher, type InsertSupportTicketWatcher,
   type SupportTicketActivity, type InsertSupportTicketActivity,
+  type SupportSavedFilter, type InsertSupportSavedFilter,
   type AgentCardHealthCheck, type InsertAgentCardHealthCheck,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, asc, sql, ilike, isNotNull, inArray, lte, type SQL } from "drizzle-orm";
+import { eq, ne, and, or, desc, asc, sql, ilike, isNotNull, isNull, inArray, gte, lte, type SQL } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -102,7 +104,21 @@ export interface IStorage {
   // Support Tickets
   getSupportTicketsByUserId(userId: string): Promise<SupportTicket[]>;
   getSupportTicketsByTenantId(tenantId: string, status?: string): Promise<SupportTicket[]>;
-  getAllSupportTickets(filters?: { status?: string | string[]; priority?: string; category?: string; tenantId?: string }): Promise<SupportTicket[]>;
+  getAllSupportTickets(filters?: {
+    status?: string | string[];
+    priority?: string;
+    category?: string;
+    tenantId?: string;
+    assignedTo?: string;
+    unassigned?: boolean;
+    queueId?: string;
+    queueIds?: string[];
+    ticketType?: string;
+    search?: string;
+    breachingBefore?: Date;
+    breachingAfter?: Date;
+    closedSince?: Date;
+  }): Promise<SupportTicket[]>;
   getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
   createSupportTicket(ticket: InsertSupportTicket): Promise<SupportTicket>;
   updateSupportTicket(id: string, updates: Partial<InsertSupportTicket>): Promise<SupportTicket>;
@@ -125,6 +141,18 @@ export interface IStorage {
   getSupportTicketPlannerSyncsByTenant(tenantId: string): Promise<SupportTicketPlannerSync[]>;
   updateSupportTicketPlannerSync(id: string, updates: Partial<InsertSupportTicketPlannerSync>): Promise<SupportTicketPlannerSync>;
   getTenantsWithSupportPlannerEnabled(): Promise<Tenant[]>;
+
+  // Saved Filters
+  getSupportSavedFilters(userId: string, tenantId?: string | null): Promise<SupportSavedFilter[]>;
+  createSupportSavedFilter(f: InsertSupportSavedFilter): Promise<SupportSavedFilter>;
+  updateSupportSavedFilter(id: string, userId: string, updates: Partial<InsertSupportSavedFilter>): Promise<SupportSavedFilter | undefined>;
+  deleteSupportSavedFilter(id: string, userId: string): Promise<void>;
+
+  // Search & Analytics
+  searchSupportTickets(opts: { tenantId?: string | null; q: string; limit?: number }): Promise<Array<SupportTicket & { rank: number; snippet: string | null }>>;
+  searchSupportTicketReplies(opts: { tenantId?: string | null; q: string; limit?: number }): Promise<Array<{ id: string; ticketId: string; rank: number; snippet: string | null }>>;
+  getSupportAnalytics(tenantId?: string | null): Promise<any>;
+  getSupportMetricsForAppKey(tenantId: string, appKeyId: string): Promise<{ open: number; awaitingCustomer: number; breachRate7d: number }>;
 
   // Agent Card Health
   saveAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck>;
@@ -550,7 +578,21 @@ export class DbStorage implements IStorage {
       .orderBy(desc(supportTickets.createdAt));
   }
 
-  async getAllSupportTickets(filters?: { status?: string | string[]; priority?: string; category?: string; tenantId?: string }): Promise<SupportTicket[]> {
+  async getAllSupportTickets(filters?: {
+    status?: string | string[];
+    priority?: string;
+    category?: string;
+    tenantId?: string;
+    assignedTo?: string;
+    unassigned?: boolean;
+    queueId?: string;
+    queueIds?: string[];
+    ticketType?: string;
+    search?: string;
+    breachingBefore?: Date;
+    breachingAfter?: Date;
+    closedSince?: Date;
+  }): Promise<SupportTicket[]> {
     const conds: SQL[] = [];
     if (filters?.status) {
       if (Array.isArray(filters.status)) conds.push(inArray(supportTickets.status, filters.status));
@@ -559,6 +601,26 @@ export class DbStorage implements IStorage {
     if (filters?.priority) conds.push(eq(supportTickets.priority, filters.priority));
     if (filters?.category) conds.push(eq(supportTickets.category, filters.category));
     if (filters?.tenantId) conds.push(eq(supportTickets.tenantId, filters.tenantId));
+    if (filters?.assignedTo) conds.push(eq(supportTickets.assignedTo, filters.assignedTo));
+    if (filters?.unassigned) conds.push(isNull(supportTickets.assignedTo));
+    if (filters?.queueId) conds.push(eq(supportTickets.queueId, filters.queueId));
+    if (filters?.queueIds && filters.queueIds.length > 0) conds.push(inArray(supportTickets.queueId, filters.queueIds));
+    if (filters?.ticketType) conds.push(eq(supportTickets.ticketType, filters.ticketType));
+    if (filters?.search) {
+      // Prefer FTS via the generated tsvector column when present; fall back
+      // to ILIKE so this still works on databases that haven't run the FTS
+      // migration yet.
+      const term = `%${filters.search}%`;
+      const searchCond = or(
+        sql`${supportTickets}.search_vector @@ websearch_to_tsquery('english', ${filters.search})`,
+        ilike(supportTickets.subject, term),
+        ilike(supportTickets.description, term),
+      );
+      if (searchCond) conds.push(searchCond);
+    }
+    if (filters?.breachingBefore) conds.push(lte(supportTickets.resolutionDueAt, filters.breachingBefore));
+    if (filters?.breachingAfter) conds.push(gte(supportTickets.resolutionDueAt, filters.breachingAfter));
+    if (filters?.closedSince) conds.push(gte(supportTickets.closedAt, filters.closedSince));
     const q = conds.length > 0
       ? db.select().from(supportTickets).where(and(...conds))
       : db.select().from(supportTickets);
@@ -693,6 +755,158 @@ export class DbStorage implements IStorage {
       eq(tenants.supportPlannerEnabled, true),
       isNotNull(tenants.supportPlannerPlanId),
     ));
+  }
+
+  // ==================== Saved Filters ====================
+  async getSupportSavedFilters(userId: string, tenantId?: string | null): Promise<SupportSavedFilter[]> {
+    const conds: SQL[] = [eq(supportSavedFilters.userId, userId)];
+    if (tenantId) conds.push(eq(supportSavedFilters.tenantId, tenantId));
+    return db.select().from(supportSavedFilters)
+      .where(and(...conds))
+      .orderBy(desc(supportSavedFilters.isPinned), supportSavedFilters.sortOrder, supportSavedFilters.name);
+  }
+
+  async createSupportSavedFilter(f: InsertSupportSavedFilter): Promise<SupportSavedFilter> {
+    const [created] = await db.insert(supportSavedFilters).values(f).returning();
+    return created;
+  }
+
+  async updateSupportSavedFilter(id: string, userId: string, updates: Partial<InsertSupportSavedFilter>): Promise<SupportSavedFilter | undefined> {
+    const [updated] = await db.update(supportSavedFilters)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(supportSavedFilters.id, id), eq(supportSavedFilters.userId, userId)))
+      .returning();
+    return updated;
+  }
+
+  async deleteSupportSavedFilter(id: string, userId: string): Promise<void> {
+    await db.delete(supportSavedFilters)
+      .where(and(eq(supportSavedFilters.id, id), eq(supportSavedFilters.userId, userId)));
+  }
+
+  // ==================== FTS Search ====================
+  async searchSupportTickets(opts: { tenantId?: string | null; q: string; limit?: number }): Promise<Array<SupportTicket & { rank: number; snippet: string | null }>> {
+    const limit = Math.min(opts.limit || 50, 200);
+    const cond = opts.tenantId
+      ? sql`${supportTickets.tenantId} = ${opts.tenantId} AND search_vector @@ websearch_to_tsquery('english', ${opts.q})`
+      : sql`search_vector @@ websearch_to_tsquery('english', ${opts.q})`;
+    const rows = await db.execute(sql`
+      SELECT ${supportTickets}.*,
+             ts_rank(search_vector, websearch_to_tsquery('english', ${opts.q})) AS rank,
+             ts_headline('english', coalesce(description,''), websearch_to_tsquery('english', ${opts.q}),
+               'StartSel=<mark>,StopSel=</mark>,MaxFragments=1,MaxWords=20,MinWords=8') AS snippet
+      FROM ${supportTickets}
+      WHERE ${cond}
+      ORDER BY rank DESC
+      LIMIT ${limit}
+    `);
+    return ((rows as any).rows || rows) as any;
+  }
+
+  async searchSupportTicketReplies(opts: { tenantId?: string | null; q: string; limit?: number }): Promise<Array<{ id: string; ticketId: string; rank: number; snippet: string | null }>> {
+    const limit = Math.min(opts.limit || 50, 200);
+    const tenantJoin = opts.tenantId ? sql`AND t.tenant_id = ${opts.tenantId}` : sql``;
+    const rows = await db.execute(sql`
+      SELECT r.id, r.ticket_id AS "ticketId",
+             ts_rank(r.search_vector, websearch_to_tsquery('english', ${opts.q})) AS rank,
+             ts_headline('english', coalesce(r.message,''), websearch_to_tsquery('english', ${opts.q}),
+               'StartSel=<mark>,StopSel=</mark>,MaxFragments=1,MaxWords=20,MinWords=8') AS snippet
+      FROM support_ticket_replies r
+      JOIN support_tickets t ON t.id = r.ticket_id
+      WHERE r.search_vector @@ websearch_to_tsquery('english', ${opts.q}) ${tenantJoin}
+      ORDER BY rank DESC
+      LIMIT ${limit}
+    `);
+    return ((rows as any).rows || rows) as any;
+  }
+
+  // ==================== Analytics ====================
+  async getSupportAnalytics(tenantId?: string | null): Promise<any> {
+    const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+
+    const summary = await db.execute(sql`
+      SELECT
+        SUM(CASE WHEN status IN ('new','open','in_progress') THEN 1 ELSE 0 END)::int AS open,
+        SUM(CASE WHEN status IN ('pending','on_hold') THEN 1 ELSE 0 END)::int AS "awaitingCustomer",
+        SUM(CASE WHEN status IN ('resolved','closed') AND (resolved_at >= now() - interval '7 days' OR closed_at >= now() - interval '7 days') THEN 1 ELSE 0 END)::int AS "resolved7d",
+        SUM(CASE WHEN created_at >= now() - interval '7 days' THEN 1 ELSE 0 END)::int AS "created7d",
+        ROUND(AVG(CASE WHEN csat_score IS NOT NULL AND csat_submitted_at >= now() - interval '30 days' THEN csat_score END)::numeric, 2)::float AS "csatAvg30d",
+        COALESCE(
+          SUM(CASE WHEN sla_breached = true AND created_at >= now() - interval '7 days' THEN 1 ELSE 0 END)::float
+          / NULLIF(SUM(CASE WHEN created_at >= now() - interval '7 days' THEN 1 ELSE 0 END), 0)
+        , 0)::float AS "breachRate7d"
+      FROM support_tickets WHERE ${tenantCond}
+    `);
+    const sumRow: any = ((summary as any).rows || summary)[0] || {};
+
+    const volume = await db.execute(sql`
+      WITH days AS (
+        SELECT generate_series(date_trunc('day', now()) - interval '13 days', date_trunc('day', now()), interval '1 day')::date AS day
+      )
+      SELECT to_char(d.day,'YYYY-MM-DD') AS day,
+        COALESCE(SUM(CASE WHEN date_trunc('day', t.created_at)::date = d.day THEN 1 ELSE 0 END),0)::int AS created,
+        COALESCE(SUM(CASE WHEN date_trunc('day', COALESCE(t.resolved_at, t.closed_at))::date = d.day THEN 1 ELSE 0 END),0)::int AS resolved
+      FROM days d
+      LEFT JOIN support_tickets t ON ${tenantCond} AND (
+        date_trunc('day', t.created_at)::date = d.day
+        OR date_trunc('day', COALESCE(t.resolved_at, t.closed_at))::date = d.day
+      )
+      GROUP BY d.day ORDER BY d.day
+    `);
+
+    const byPriority = await db.execute(sql`SELECT priority, COUNT(*)::int AS count FROM support_tickets WHERE ${tenantCond} AND status NOT IN ('closed','cancelled') GROUP BY priority ORDER BY count DESC`);
+    const byCategory = await db.execute(sql`SELECT category, COUNT(*)::int AS count FROM support_tickets WHERE ${tenantCond} AND created_at >= now() - interval '30 days' GROUP BY category ORDER BY count DESC`);
+    const bySource = await db.execute(sql`SELECT COALESCE(source,'unknown') AS source, COUNT(*)::int AS count FROM support_tickets WHERE ${tenantCond} AND created_at >= now() - interval '30 days' GROUP BY source ORDER BY count DESC`);
+    const byApp = await db.execute(sql`SELECT COALESCE(application_source,'unknown') AS application, COUNT(*)::int AS count FROM support_tickets WHERE ${tenantCond} AND created_at >= now() - interval '30 days' GROUP BY application_source ORDER BY count DESC LIMIT 10`);
+
+    const rt = await db.execute(sql`
+      SELECT
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (first_response_at - created_at))/60)::float AS "medianFirstResponseMinutes",
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (COALESCE(resolved_at, closed_at) - created_at))/60)::float AS "medianResolutionMinutes"
+      FROM support_tickets
+      WHERE ${tenantCond} AND created_at >= now() - interval '30 days'
+    `);
+    const rtRow: any = ((rt as any).rows || rt)[0] || {};
+
+    return {
+      summary: {
+        open: sumRow.open || 0,
+        awaitingCustomer: sumRow.awaitingCustomer || 0,
+        resolved7d: sumRow.resolved7d || 0,
+        created7d: sumRow.created7d || 0,
+        csatAvg30d: sumRow.csatAvg30d ?? null,
+        breachRate7d: sumRow.breachRate7d || 0,
+      },
+      volumeByDay: ((volume as any).rows || volume) as any[],
+      byPriority: ((byPriority as any).rows || byPriority) as any[],
+      byCategory: ((byCategory as any).rows || byCategory) as any[],
+      bySource: ((bySource as any).rows || bySource) as any[],
+      byApplication: ((byApp as any).rows || byApp) as any[],
+      responseTimes: {
+        medianFirstResponseMinutes: rtRow.medianFirstResponseMinutes ?? null,
+        medianResolutionMinutes: rtRow.medianResolutionMinutes ?? null,
+      },
+    };
+  }
+
+  async getSupportMetricsForAppKey(tenantId: string, appKeyId: string): Promise<{ open: number; awaitingCustomer: number; breachRate7d: number }> {
+    const r = await db.execute(sql`
+      SELECT
+        SUM(CASE WHEN status IN ('new','open','in_progress') THEN 1 ELSE 0 END)::int AS open,
+        SUM(CASE WHEN status IN ('pending','on_hold') THEN 1 ELSE 0 END)::int AS "awaitingCustomer",
+        COALESCE(
+          SUM(CASE WHEN sla_breached = true AND created_at >= now() - interval '7 days' THEN 1 ELSE 0 END)::float
+          / NULLIF(SUM(CASE WHEN created_at >= now() - interval '7 days' THEN 1 ELSE 0 END), 0)
+        , 0)::float AS "breachRate7d"
+      FROM support_tickets
+      WHERE tenant_id = ${tenantId} AND app_integration_key_id = ${appKeyId}
+    `);
+    const row: any = ((r as any).rows || r)[0] || {};
+    return {
+      open: row.open || 0,
+      awaitingCustomer: row.awaitingCustomer || 0,
+      breachRate7d: row.breachRate7d || 0,
+    };
   }
 
   // ==================== Agent Card Health ====================

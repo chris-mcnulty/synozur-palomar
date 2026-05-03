@@ -23,6 +23,7 @@ import SupportConsole from "@/pages/support-console";
 import SupportQueuesAdmin from "@/pages/support-queues";
 import SupportSlaPoliciesAdmin from "@/pages/support-sla-policies";
 import SupportKbAdmin from "@/pages/support-kb-admin";
+import SupportAnalyticsPage from "@/pages/support-analytics";
 import PortalTicket from "@/pages/portal-ticket";
 import PortalLookup from "@/pages/portal-lookup";
 import PortalKb from "@/pages/portal-kb";
@@ -190,6 +191,9 @@ function Router() {
             <SupportKbAdmin />
           </PermissionGuard>
         ) : <Redirect to="/login" />}
+      </Route>
+      <Route path="/support/analytics">
+        {user ? <SupportStaffGuard><SupportAnalyticsPage /></SupportStaffGuard> : <Redirect to="/login" />}
       </Route>
       <Route component={NotFound} />
     </Switch>
