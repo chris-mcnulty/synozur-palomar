@@ -47,6 +47,14 @@ export async function checkAndRunMissedJobs(): Promise<CatchupResult[]> {
           const { runPlanExpirationCheck } = await import('./plan-expiration-scheduler.js');
           await runPlanExpirationCheck('catchup');
         }
+      },
+      {
+        jobType: 'sla_breach_watcher',
+        getExpectedRun: getExpectedSlaBreachRun,
+        runJob: async () => {
+          const { runSlaBreachCheck } = await import('./sla-breach-scheduler.js');
+          await runSlaBreachCheck('catchup');
+        }
       }
     ];
 
@@ -127,6 +135,13 @@ function getExpectedWeeklyRun(now: Date, jobType: string): Date | null {
 function getExpectedDailyRun(now: Date, _jobType: string): Date | null {
   const oneDayAgo = new Date(now.getTime() - (25 * 60 * 60 * 1000));
   return oneDayAgo;
+}
+
+function getExpectedSlaBreachRun(now: Date, _jobType: string): Date | null {
+  // SLA watcher runs every minute. Trigger catch-up if the last successful run
+  // is older than ~5 minutes (3x interval + small buffer).
+  const expectedRun = new Date(now.getTime() - 5 * 60 * 1000);
+  return expectedRun;
 }
 
 function getExpectedPlannerSyncRun(now: Date, _jobType: string): Date | null {

@@ -39,6 +39,34 @@ const isConstellationAdmin = (role: string): boolean => {
   return ['admin', 'billing-admin'].includes(role) || role === 'constellation_admin' || role === 'global_admin';
 };
 
+function decorateTicketBreachInfo<T extends {
+  firstResponseDueAt?: Date | string | null;
+  firstResponseAt?: Date | string | null;
+  resolutionDueAt?: Date | string | null;
+  resolvedAt?: Date | string | null;
+  slaBreached?: boolean | null;
+  status?: string | null;
+}>(ticket: T): T & { breachInMinutes: number | null; breachType: 'first_response' | 'resolution' | null } {
+  const now = Date.now();
+  let best: { mins: number; type: 'first_response' | 'resolution' } | null = null;
+  const closed = ticket.status === 'resolved' || ticket.status === 'closed' || ticket.status === 'cancelled';
+  if (!closed) {
+    if (ticket.firstResponseDueAt && !ticket.firstResponseAt) {
+      const mins = Math.floor((new Date(ticket.firstResponseDueAt).getTime() - now) / 60_000);
+      if (mins >= 0 && mins <= 60) best = { mins, type: 'first_response' };
+    }
+    if (ticket.resolutionDueAt && !ticket.resolvedAt) {
+      const mins = Math.floor((new Date(ticket.resolutionDueAt).getTime() - now) / 60_000);
+      if (mins >= 0 && mins <= 60 && (best === null || mins < best.mins)) best = { mins, type: 'resolution' };
+    }
+  }
+  return {
+    ...ticket,
+    breachInMinutes: best?.mins ?? null,
+    breachType: best?.type ?? null,
+  };
+}
+
 export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
   const { requireAuth, requireRole } = deps;
 
@@ -171,11 +199,11 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
           category: category || undefined,
           tenantId: effectiveTenantId,
         });
-        return res.json(tickets);
+        return res.json(tickets.map(decorateTicketBreachInfo));
       }
 
       const tickets = await storage.getSupportTicketsByUserId(user.id);
-      return res.json(tickets);
+      return res.json(tickets.map(decorateTicketBreachInfo));
     } catch (error) {
       console.error("Error fetching support tickets:", error);
       return res.status(500).json({ error: "Failed to fetch support tickets" });

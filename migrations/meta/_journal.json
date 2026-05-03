@@ -15,6 +15,13 @@
       "when": 1777588860270,
       "tag": "0001_add_cascade_audit_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777786561553,
+      "tag": "0003_sla_breach_watcher",
+      "breakpoints": true
     }
   ]
 }

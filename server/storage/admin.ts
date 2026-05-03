@@ -931,8 +931,21 @@ export const adminMethods: ThisType<IStorage & {
 
   async createSupportTicketReply(reply: InsertSupportTicketReply): Promise<SupportTicketReply> {
     const [created] = await db.insert(supportTicketReplies).values(reply).returning();
+    // Stamp first-response time on the first non-internal agent reply so the
+    // SLA breach watcher can correctly stop chasing first-response breaches.
+    const [ticket] = await db.select().from(supportTickets).where(eq(supportTickets.id, reply.ticketId));
+    const updates: { updatedAt: Date; firstResponseAt?: Date } = { updatedAt: new Date() };
+    if (
+      ticket
+      && !ticket.firstResponseAt
+      && !reply.isInternal
+      && reply.userId
+      && reply.userId !== ticket.userId
+    ) {
+      updates.firstResponseAt = new Date();
+    }
     await db.update(supportTickets)
-      .set({ updatedAt: new Date() })
+      .set(updates)
       .where(eq(supportTickets.id, reply.ticketId));
     return created;
   },
@@ -1294,6 +1307,28 @@ export const adminMethods: ThisType<IStorage & {
     const [p] = await db.select().from(supportSlaPolicies).where(eq(supportSlaPolicies.id, id));
     return p;
   },
+  async getSupportTicketsForSlaCheck(now: Date): Promise<SupportTicket[]> {
+    // Open (non-resolved/closed/cancelled) tickets that are either approaching or past
+    // a first-response or resolution due time. Bound to 1 hour after now to capture
+    // pre-breach indicator candidates.
+    const horizon = new Date(now.getTime() + 60 * 60_000);
+    return db.select().from(supportTickets).where(and(
+      inArray(supportTickets.status, ['new', 'open', 'in_progress', 'pending', 'on_hold']),
+      or(
+        and(
+          isNull(supportTickets.firstResponseAt),
+          isNotNull(supportTickets.firstResponseDueAt),
+          lte(supportTickets.firstResponseDueAt, horizon),
+        ),
+        and(
+          isNull(supportTickets.resolvedAt),
+          isNotNull(supportTickets.resolutionDueAt),
+          lte(supportTickets.resolutionDueAt, horizon),
+        ),
+      )!,
+    ));
+  },
+
   async findMatchingSlaPolicy(tenantId: string, priority: string, ticketType?: string): Promise<SupportSlaPolicy | undefined> {
     const rows = await db.select().from(supportSlaPolicies).where(and(
       eq(supportSlaPolicies.tenantId, tenantId),

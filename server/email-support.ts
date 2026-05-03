@@ -91,6 +91,58 @@ export async function sendSupportTicketNotification(
   await client.send(msg);
 }
 
+export async function sendSlaBreachEscalation(
+  ticket: SupportTicket,
+  recipients: string[],
+  details: {
+    breachType: 'first_response' | 'resolution';
+    queueName?: string | null;
+    requesterEmail?: string | null;
+    overdueMinutes: number;
+    priorityBumpedTo?: string | null;
+  },
+) {
+  if (recipients.length === 0) return;
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const [primary, ...rest] = recipients;
+  const bcc = rest.length > 0 ? rest : undefined;
+  const breachLabel = details.breachType === 'first_response' ? 'First Response' : 'Resolution';
+  const ageMinutes = Math.max(0, Math.round((Date.now() - new Date(ticket.createdAt).getTime()) / 60_000));
+  const ageStr = ageMinutes >= 60 ? `${Math.floor(ageMinutes / 60)}h ${ageMinutes % 60}m` : `${ageMinutes}m`;
+  const overdueStr = details.overdueMinutes >= 60
+    ? `${Math.floor(details.overdueMinutes / 60)}h ${details.overdueMinutes % 60}m`
+    : `${details.overdueMinutes}m`;
+  const deepLink = `${APP_URL}/support?ticketId=${ticket.id}`;
+  const bumpRow = details.priorityBumpedTo
+    ? `<tr><td style="padding:6px 12px;font-size:13px;color:#888;">Priority</td><td style="padding:6px 12px;font-size:13px;color:#dc2626;font-weight:600;">Bumped to ${details.priorityBumpedTo.toUpperCase()}</td></tr>`
+    : `<tr><td style="padding:6px 12px;font-size:13px;color:#888;">Priority</td><td style="padding:6px 12px;font-size:13px;color:#333;">${(ticket.priority || 'medium').toUpperCase()}</td></tr>`;
+  const msg = {
+    to: primary,
+    bcc,
+    from: fromEmail,
+    subject: `[SLA BREACH] ${breachLabel} overdue – Ticket #${ticket.ticketNumber}: ${ticket.subject}`,
+    html: `
+      <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 640px; margin: 0 auto;">
+        <div style="background:#dc2626;color:#fff;padding:20px;">
+          <h2 style="margin:0;">SLA Breach: ${breachLabel} overdue</h2>
+          <div style="opacity:.9;font-size:13px;margin-top:4px;">Ticket #${ticket.ticketNumber} · ${overdueStr} past due</div>
+        </div>
+        <div style="padding:20px;background:#fff;">
+          <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Subject</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${ticket.subject}</td></tr>
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Requester</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${details.requesterEmail || '—'}</td></tr>
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Queue</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${details.queueName || '—'}</td></tr>
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Age</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${ageStr}</td></tr>
+            ${bumpRow}
+          </table>
+          <a href="${deepLink}" style="display:inline-block;padding:10px 18px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:6px;font-size:14px;">Open in agent console</a>
+        </div>
+      </div>
+    `,
+  };
+  await client.send(msg);
+}
+
 export async function sendTicketConfirmationToSubmitter(
   ticket: SupportTicket,
   user: { email: string; firstName?: string | null; lastName?: string | null }

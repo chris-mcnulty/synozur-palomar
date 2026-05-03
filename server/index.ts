@@ -293,6 +293,18 @@ async function setupAdditionalServices(app: Express, server: Server, envValid: b
         log(`⚠️ Failed to import agent card health scheduler: ${importError.message}`);
       });
 
+      // Start the SLA breach watcher
+      log('🔄 Starting SLA breach watcher...');
+      import('./services/sla-breach-scheduler.js').then(({ startSlaBreachScheduler }) => {
+        startSlaBreachScheduler().then(() => {
+          log('✅ SLA breach watcher started');
+        }).catch((schedulerError: any) => {
+          log(`⚠️ SLA breach watcher failed to start: ${schedulerError.message}`);
+        });
+      }).catch((importError: any) => {
+        log(`⚠️ Failed to import SLA breach watcher: ${importError.message}`);
+      });
+
       // Start the Teams alert scheduler
       log('🔄 Starting Teams alert scheduler...');
       import('./services/teams-alert-scheduler.js').then(({ startTeamsAlertScheduler }) => {

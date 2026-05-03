@@ -51,6 +51,9 @@ interface Ticket {
   replies?: Reply[];
   author?: { id: string; email: string; firstName: string; lastName: string } | null;
   tenant?: { id: string; name: string } | null;
+  slaBreached?: boolean | null;
+  breachInMinutes?: number | null;
+  breachType?: 'first_response' | 'resolution' | null;
 }
 
 interface Reply {
@@ -162,6 +165,21 @@ function TicketList({
                       <Badge className={getStatusBadgeClass(ticket.status)} data-testid={`badge-status-${ticket.id}`}>
                         {formatLabel(ticket.status)}
                       </Badge>
+                      {ticket.slaBreached ? (
+                        <Badge
+                          className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 border-transparent text-xs"
+                          data-testid={`badge-sla-breached-${ticket.id}`}
+                        >
+                          SLA Breached
+                        </Badge>
+                      ) : typeof ticket.breachInMinutes === 'number' && ticket.breachInMinutes >= 0 ? (
+                        <Badge
+                          className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-transparent text-xs"
+                          data-testid={`badge-sla-warning-${ticket.id}`}
+                        >
+                          Breaching in {ticket.breachInMinutes}m
+                        </Badge>
+                      ) : null}
                     </div>
                     <p className="font-medium truncate" data-testid={`text-ticket-subject-${ticket.id}`}>
                       {ticket.subject}

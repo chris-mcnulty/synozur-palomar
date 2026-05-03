@@ -39,6 +39,9 @@ interface TicketListItem {
   status: string;
   createdAt: string;
   updatedAt: string;
+  slaBreached?: boolean | null;
+  breachInMinutes?: number | null;
+  breachType?: 'first_response' | 'resolution' | null;
 }
 
 interface TicketReply {
@@ -493,6 +496,21 @@ export function AdminSupportTab() {
                       <Badge variant="outline" className="text-xs" data-testid={`badge-category-${ticket.id}`}>
                         {formatLabel(ticket.category)}
                       </Badge>
+                      {ticket.slaBreached ? (
+                        <Badge
+                          className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 border-transparent text-xs"
+                          data-testid={`badge-sla-breached-${ticket.id}`}
+                        >
+                          SLA Breached
+                        </Badge>
+                      ) : typeof ticket.breachInMinutes === 'number' && ticket.breachInMinutes >= 0 ? (
+                        <Badge
+                          className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-transparent text-xs"
+                          data-testid={`badge-sla-warning-${ticket.id}`}
+                        >
+                          Breaching in {ticket.breachInMinutes}m
+                        </Badge>
+                      ) : null}
                     </div>
                     <p className="font-medium truncate" data-testid={`text-ticket-subject-${ticket.id}`}>
                       {ticket.subject}
