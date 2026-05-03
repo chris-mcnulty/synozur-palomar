@@ -1,7 +1,8 @@
 import {
   users, tenants, blockedDomains, systemSettings,
   groundingDocuments,
-  supportQueues, supportSlaPolicies, supportKbArticles, supportAppIntegrationKeys,
+  supportQueues, supportQueueMembers, supportQueueRoundRobinState,
+  supportSlaPolicies, supportKbArticles, supportAppIntegrationKeys,
   supportTickets, supportTicketReplies, supportTicketPlannerSync,
   supportTicketWatchers, supportTicketActivity,
   agentCardHealthChecks,
@@ -11,6 +12,7 @@ import {
   type SystemSetting, type InsertSystemSetting,
   type GroundingDocument, type InsertGroundingDocument,
   type SupportQueue, type InsertSupportQueue,
+  type SupportQueueMember,
   type SupportSlaPolicy, type InsertSupportSlaPolicy,
   type SupportKbArticle, type InsertSupportKbArticle,
   type SupportAppIntegrationKey, type InsertSupportAppIntegrationKey,
@@ -62,6 +64,15 @@ export interface IStorage {
   createSupportQueue(q: InsertSupportQueue): Promise<SupportQueue>;
   updateSupportQueue(id: string, updates: Partial<InsertSupportQueue>): Promise<SupportQueue>;
   deleteSupportQueue(id: string): Promise<void>;
+
+  // Queue Members & auto-assignment
+  getSupportQueueMembers(queueId: string): Promise<Array<SupportQueueMember & { user: { id: string; email: string; firstName: string | null; lastName: string | null; isActive: boolean } | null }>>;
+  getSupportQueueMemberIds(queueId: string): Promise<string[]>;
+  addSupportQueueMember(queueId: string, userId: string): Promise<SupportQueueMember>;
+  removeSupportQueueMember(queueId: string, userId: string): Promise<void>;
+  setSupportQueueMembers(queueId: string, userIds: string[]): Promise<void>;
+  getNextQueueAssignee(queueId: string): Promise<string | null>;
+  bumpQueueRoundRobin(queueId: string, userId: string): Promise<void>;
 
   // SLA Policies
   getSupportSlaPolicies(tenantId: string): Promise<SupportSlaPolicy[]>;
@@ -289,6 +300,123 @@ export class DbStorage implements IStorage {
 
   async deleteSupportQueue(id: string): Promise<void> {
     await db.delete(supportQueues).where(eq(supportQueues.id, id));
+  }
+
+  // ==================== Support Queue Members ====================
+  async getSupportQueueMembers(queueId: string): Promise<Array<SupportQueueMember & { user: { id: string; email: string; firstName: string | null; lastName: string | null; isActive: boolean } | null }>> {
+    const rows = await db.select({
+      id: supportQueueMembers.id,
+      queueId: supportQueueMembers.queueId,
+      userId: supportQueueMembers.userId,
+      createdAt: supportQueueMembers.createdAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        isActive: users.isActive,
+      },
+    }).from(supportQueueMembers)
+      .leftJoin(users, eq(users.id, supportQueueMembers.userId))
+      .where(eq(supportQueueMembers.queueId, queueId));
+    return rows as any;
+  }
+
+  async getSupportQueueMemberIds(queueId: string): Promise<string[]> {
+    const rows = await db.select({ userId: supportQueueMembers.userId })
+      .from(supportQueueMembers)
+      .where(eq(supportQueueMembers.queueId, queueId));
+    return rows.map(r => r.userId);
+  }
+
+  async addSupportQueueMember(queueId: string, userId: string): Promise<SupportQueueMember> {
+    const [created] = await db.insert(supportQueueMembers)
+      .values({ queueId, userId })
+      .onConflictDoNothing({ target: [supportQueueMembers.queueId, supportQueueMembers.userId] })
+      .returning();
+    if (created) return created;
+    const [existing] = await db.select().from(supportQueueMembers)
+      .where(and(eq(supportQueueMembers.queueId, queueId), eq(supportQueueMembers.userId, userId)));
+    return existing;
+  }
+
+  async removeSupportQueueMember(queueId: string, userId: string): Promise<void> {
+    await db.delete(supportQueueMembers).where(and(
+      eq(supportQueueMembers.queueId, queueId),
+      eq(supportQueueMembers.userId, userId),
+    ));
+  }
+
+  async setSupportQueueMembers(queueId: string, userIds: string[]): Promise<void> {
+    const unique = Array.from(new Set(userIds));
+    await db.delete(supportQueueMembers).where(and(
+      eq(supportQueueMembers.queueId, queueId),
+      unique.length > 0 ? sql`${supportQueueMembers.userId} NOT IN (${sql.join(unique.map(u => sql`${u}`), sql`, `)})` : sql`true`,
+    ));
+    if (unique.length > 0) {
+      await db.insert(supportQueueMembers)
+        .values(unique.map(userId => ({ queueId, userId })))
+        .onConflictDoNothing({ target: [supportQueueMembers.queueId, supportQueueMembers.userId] });
+    }
+  }
+
+  // ==================== Round-robin / least-loaded auto-assignment ====================
+  async getNextQueueAssignee(queueId: string): Promise<string | null> {
+    const memberRows = await db.select({
+      userId: supportQueueMembers.userId,
+      isActive: users.isActive,
+    }).from(supportQueueMembers)
+      .leftJoin(users, eq(users.id, supportQueueMembers.userId))
+      .where(eq(supportQueueMembers.queueId, queueId));
+    const activeMembers = memberRows.filter(r => r.isActive !== false).map(r => r.userId);
+    if (activeMembers.length === 0) return null;
+
+    const counts = new Map<string, number>();
+    for (const uid of activeMembers) counts.set(uid, 0);
+    const openCounts = await db.select({
+      assignedTo: supportTickets.assignedTo,
+      count: sql<number>`cast(count(*) as int)`.as('count'),
+    }).from(supportTickets)
+      .where(and(
+        inArray(supportTickets.assignedTo, activeMembers),
+        inArray(supportTickets.status, ['new', 'open', 'in_progress', 'pending', 'on_hold']),
+      ))
+      .groupBy(supportTickets.assignedTo);
+    for (const row of openCounts) {
+      if (row.assignedTo) counts.set(row.assignedTo, Number(row.count) || 0);
+    }
+
+    let minLoad = Infinity;
+    for (const c of Array.from(counts.values())) if (c < minLoad) minLoad = c;
+    const candidates = activeMembers.filter(uid => (counts.get(uid) ?? 0) === minLoad);
+    if (candidates.length === 1) {
+      const chosen = candidates[0];
+      await this.bumpQueueRoundRobin(queueId, chosen);
+      return chosen;
+    }
+
+    const [state] = await db.select().from(supportQueueRoundRobinState)
+      .where(eq(supportQueueRoundRobinState.queueId, queueId));
+    const last = state?.lastAssignedUserId || null;
+    const ordered = activeMembers.filter(uid => candidates.includes(uid));
+    let chosen: string;
+    if (!last) {
+      chosen = ordered[0];
+    } else {
+      const idx = ordered.indexOf(last);
+      chosen = idx === -1 ? ordered[0] : ordered[(idx + 1) % ordered.length];
+    }
+    await this.bumpQueueRoundRobin(queueId, chosen);
+    return chosen;
+  }
+
+  async bumpQueueRoundRobin(queueId: string, userId: string): Promise<void> {
+    await db.insert(supportQueueRoundRobinState)
+      .values({ queueId, lastAssignedUserId: userId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: supportQueueRoundRobinState.queueId,
+        set: { lastAssignedUserId: userId, updatedAt: new Date() },
+      });
   }
 
   // ==================== SLA Policies ====================

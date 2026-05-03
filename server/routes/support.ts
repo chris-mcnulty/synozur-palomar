@@ -136,6 +136,11 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       try { await s.logSupportTicketActivity({ ticketId: ticket.id, actorUserId: user.id, action: 'created' }); } catch {}
 
       try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(ticket.id, { actorUserId: user.id });
+      } catch {}
+
+      try {
         const { sendSupportTicketNotification, sendTicketConfirmationToSubmitter } = await import("../email-support");
         await sendSupportTicketNotification(ticket, user);
         await sendTicketConfirmationToSubmitter(ticket, user);

@@ -263,6 +263,11 @@ export function registerSupportPortalRoutes(app: Express) {
       const portalUrl = `${APP_URL}/portal/ticket/${portalToken}`;
 
       try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(ticket.id, { actorLabel: "portal" });
+      } catch {}
+
+      try {
         const { sendExternalTicketConfirmation } = await import("../email-support");
         await sendExternalTicketConfirmation(ticket, { email: body.data.requesterEmail, name: body.data.requesterName }, portalUrl);
       } catch {}

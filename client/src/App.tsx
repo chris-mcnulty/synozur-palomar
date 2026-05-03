@@ -20,6 +20,9 @@ import Changelog from "@/pages/changelog";
 import Roadmap from "@/pages/roadmap";
 import Support from "@/pages/support";
 import SupportConsole from "@/pages/support-console";
+import SupportQueuesAdmin from "@/pages/support-queues";
+import SupportSlaPoliciesAdmin from "@/pages/support-sla-policies";
+import SupportKbAdmin from "@/pages/support-kb-admin";
 import PortalTicket from "@/pages/portal-ticket";
 import PortalLookup from "@/pages/portal-lookup";
 import PortalKb from "@/pages/portal-kb";
@@ -164,6 +167,30 @@ function Router() {
       <Route path="/user-guide">{user ? <UserGuide /> : <Redirect to="/login" />}</Route>
       <Route path="/changelog">{user ? <Changelog /> : <Redirect to="/login" />}</Route>
       <Route path="/roadmap">{user ? <Roadmap /> : <Redirect to="/login" />}</Route>
+      <Route path="/support/console">
+        {user ? <SupportStaffGuard><SupportConsole /></SupportStaffGuard> : <Redirect to="/login" />}
+      </Route>
+      <Route path="/support/queues">
+        {user ? (
+          <PermissionGuard allowedRoles={["admin"]}>
+            <SupportQueuesAdmin />
+          </PermissionGuard>
+        ) : <Redirect to="/login" />}
+      </Route>
+      <Route path="/support/sla-policies">
+        {user ? (
+          <PermissionGuard allowedRoles={["admin"]}>
+            <SupportSlaPoliciesAdmin />
+          </PermissionGuard>
+        ) : <Redirect to="/login" />}
+      </Route>
+      <Route path="/support/kb">
+        {user ? (
+          <PermissionGuard allowedRoles={["admin"]}>
+            <SupportKbAdmin />
+          </PermissionGuard>
+        ) : <Redirect to="/login" />}
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );

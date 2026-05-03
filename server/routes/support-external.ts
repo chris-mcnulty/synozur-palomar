@@ -106,6 +106,11 @@ export function registerSupportExternalRoutes(app: Express) {
         note: data.externalReferenceId ? `External ref: ${data.externalReferenceId}` : null,
       });
 
+      try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(ticket.id, { actorLabel: `API:${key.applicationName}` });
+      } catch {}
+
       const APP_URL = process.env.APP_PUBLIC_URL || `https://${req.get("host")}`;
       const portalUrl = `${APP_URL}/portal/ticket/${portalToken}`;
 

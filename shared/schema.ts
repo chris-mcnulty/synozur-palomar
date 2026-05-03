@@ -359,6 +359,30 @@ export const insertSupportQueueSchema = createInsertSchema(supportQueues).omit({
 export type InsertSupportQueue = z.infer<typeof insertSupportQueueSchema>;
 export type SupportQueue = typeof supportQueues.$inferSelect;
 
+// Members of a queue eligible for round-robin / least-loaded auto-assignment
+export const supportQueueMembers = pgTable("support_queue_members", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  queueId: varchar("queue_id").notNull().references(() => supportQueues.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  uniqueQueueUser: uniqueIndex("unique_support_queue_member").on(table.queueId, table.userId),
+  queueIdx: index("idx_support_queue_members_queue").on(table.queueId),
+  userIdx: index("idx_support_queue_members_user").on(table.userId),
+}));
+export const insertSupportQueueMemberSchema = createInsertSchema(supportQueueMembers).omit({ id: true, createdAt: true });
+export type InsertSupportQueueMember = z.infer<typeof insertSupportQueueMemberSchema>;
+export type SupportQueueMember = typeof supportQueueMembers.$inferSelect;
+
+// Round-robin tiebreaker state for auto-assignment within a queue
+export const supportQueueRoundRobinState = pgTable("support_queue_round_robin_state", {
+  queueId: varchar("queue_id").primaryKey().references(() => supportQueues.id, { onDelete: 'cascade' }),
+  lastAssignedUserId: varchar("last_assigned_user_id").references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+export type SupportQueueRoundRobinState = typeof supportQueueRoundRobinState.$inferSelect;
+
+// SLA Policies
 export const supportSlaPolicies = pgTable("support_sla_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),

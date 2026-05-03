@@ -78,6 +78,41 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
     return res.json({ ok: true });
   });
 
+  // ===== Queue Members (for auto-assignment) =====
+  app.get("/api/support/queues/:id/members", requireAuth, async (req, res) => {
+    const q = await s.getSupportQueueById(req.params.id);
+    if (!q) return res.status(404).json({ error: "Not found" });
+    if (!ensureTenantOrAdmin(req, res, q.tenantId)) return;
+    return res.json(await s.getSupportQueueMembers(req.params.id));
+  });
+
+  app.put("/api/support/queues/:id/members", requireAuth, adminOnly, async (req, res) => {
+    const q = await s.getSupportQueueById(req.params.id);
+    if (!q) return res.status(404).json({ error: "Not found" });
+    if (!ensureTenantOrAdmin(req, res, q.tenantId)) return;
+    const body = z.object({ userIds: z.array(z.string()) }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: "Validation failed", details: body.error.errors });
+    await s.setSupportQueueMembers(req.params.id, body.data.userIds);
+    return res.json(await s.getSupportQueueMembers(req.params.id));
+  });
+
+  app.post("/api/support/queues/:id/members", requireAuth, adminOnly, async (req, res) => {
+    const q = await s.getSupportQueueById(req.params.id);
+    if (!q) return res.status(404).json({ error: "Not found" });
+    if (!ensureTenantOrAdmin(req, res, q.tenantId)) return;
+    const body = z.object({ userId: z.string() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: "Validation failed", details: body.error.errors });
+    return res.status(201).json(await s.addSupportQueueMember(req.params.id, body.data.userId));
+  });
+
+  app.delete("/api/support/queues/:id/members/:userId", requireAuth, adminOnly, async (req, res) => {
+    const q = await s.getSupportQueueById(req.params.id);
+    if (!q) return res.status(404).json({ error: "Not found" });
+    if (!ensureTenantOrAdmin(req, res, q.tenantId)) return;
+    await s.removeSupportQueueMember(req.params.id, req.params.userId);
+    return res.json({ ok: true });
+  });
+
   // ===== SLA Policies =====
   app.get("/api/support/sla-policies", requireAuth, async (req, res) => {
     const tenantId = getTenantId(req);
@@ -472,6 +507,12 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
       await persistAttachments(created.id, seedReply.id);
 
       await s.logSupportTicketActivity({ ticketId: created.id, actorLabel: data.from.email, action: "created", note: "via email" });
+
+      try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(created.id, { actorLabel: "inbound-email" });
+      } catch {}
+
       return res.status(201).json({ ok: true, ticketId: created.id, ticketNumber: created.ticketNumber, action: "created" });
     } catch (err: any) {
       console.error("[EMAIL-INBOUND] failed:", err);

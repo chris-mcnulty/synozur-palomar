@@ -16,7 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Loader2, Send, Inbox, AlertTriangle, Clock, Hourglass, CheckCircle2, UserCheck,
-  Users, Activity, BookOpen, Lock, Eye, Plus, X, Search,
+  Users, Activity, BookOpen, Lock, Eye, Plus, X, Search, Hand,
 } from "lucide-react";
 
 const SAVED_VIEWS = [
@@ -396,6 +396,7 @@ function TicketDetailPane({
   users: UserLite[];
 }) {
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
   const [replyText, setReplyText] = useState("");
   const [replyMode, setReplyMode] = useState<"public" | "internal">("public");
   const [showInternalNotes, setShowInternalNotes] = useState(true);
@@ -524,20 +525,48 @@ function TicketDetailPane({
               {TICKET_PRIORITIES.map((p) => <SelectItem key={p} value={p}>{fmtLabel(p)}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Select
-            value={ticket.assignedTo || "__unassigned__"}
-            onValueChange={(v) => updateTicket.mutate({ assignedTo: v === "__unassigned__" ? null : v })}
-          >
-            <SelectTrigger className="h-8 text-xs" data-testid="select-detail-assignee">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__unassigned__">Unassigned</SelectItem>
-              {users.filter((u) => u.isActive).map((u) => (
-                <SelectItem key={u.id} value={u.id}>{fullName(u)}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-1">
+            <Select
+              value={ticket.assignedTo || "__unassigned__"}
+              onValueChange={(v) => updateTicket.mutate({ assignedTo: v === "__unassigned__" ? null : v })}
+            >
+              <SelectTrigger className="h-8 text-xs flex-1" data-testid="select-detail-assignee">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__unassigned__">Unassigned</SelectItem>
+                {users.filter((u) => u.isActive).map((u) => (
+                  <SelectItem key={u.id} value={u.id}>{fullName(u)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {currentUser && ticket.assignedTo !== currentUser.id && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 px-2"
+                onClick={() => updateTicket.mutate({ assignedTo: currentUser.id })}
+                disabled={updateTicket.isPending}
+                title="Take this ticket"
+                data-testid="button-take-ticket"
+              >
+                <Hand className="h-3.5 w-3.5 mr-1" />Take
+              </Button>
+            )}
+            {currentUser && ticket.assignedTo === currentUser.id && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 px-2"
+                onClick={() => updateTicket.mutate({ assignedTo: null })}
+                disabled={updateTicket.isPending}
+                title="Reassign / release"
+                data-testid="button-release-ticket"
+              >
+                <X className="h-3.5 w-3.5 mr-1" />Release
+              </Button>
+            )}
+          </div>
           <Select
             value={ticket.queueId || "__none__"}
             onValueChange={(v) => updateTicket.mutate({ queueId: v === "__none__" ? null : v })}
