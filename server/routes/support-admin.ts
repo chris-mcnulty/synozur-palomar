@@ -591,6 +591,24 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
     return res.json(await listSubscriptions(isPlatformAdmin ? undefined : tenantId));
   });
 
+  app.post("/api/support/graph/subscriptions/:id/renew", requireAuth, adminOnly, async (req, res) => {
+    try {
+      const { supportEmailStorage } = await import("../storage/support-email-types");
+      const sub = await supportEmailStorage.getSupportEmailSubscription(req.params.id);
+      if (!sub) return res.status(404).json({ error: "Not found" });
+      if (!ensureTenantOrAdmin(req, res, sub.tenantId)) return;
+      const body = z.object({ lifetimeMinutes: z.number().int().min(15).max(4230).optional() }).safeParse(req.body || {});
+      if (!body.success) return res.status(400).json({ error: "Validation failed", details: body.error.errors });
+      const { renewSubscription } = await import("../services/support-graph-subscription");
+      await renewSubscription(req.params.id, body.data.lifetimeMinutes ?? 60);
+      const updated = await supportEmailStorage.getSupportEmailSubscription(req.params.id);
+      return res.json(updated);
+    } catch (err: any) {
+      console.error("[GRAPH-SUB] renew failed:", err);
+      return res.status(500).json({ error: err?.message || "Failed to renew subscription" });
+    }
+  });
+
   app.delete("/api/support/graph/subscriptions/:id", requireAuth, adminOnly, async (req, res) => {
     const { supportEmailStorage } = await import("../storage/support-email-types");
     const sub = await supportEmailStorage.getSupportEmailSubscription(req.params.id);

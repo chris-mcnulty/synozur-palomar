@@ -9,6 +9,7 @@ import {
   Map,
   Info,
   LifeBuoy,
+  Mail,
   ChevronRight,
 } from "lucide-react";
 import {
@@ -88,6 +89,11 @@ export function Sidebar() {
                   href="/admin/agent-card-health"
                   icon={<ActivitySquare />}
                   label="Agent Card Health"
+                />
+                <SidebarItem
+                  href="/admin/support-email-subscriptions"
+                  icon={<Mail />}
+                  label="Support Mailbox"
                 />
               </div>
             )}

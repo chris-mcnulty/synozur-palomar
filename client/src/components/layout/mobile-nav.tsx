@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/use-auth";
 import { Link, useLocation } from "wouter";
-import { Menu, Home, Settings, ActivitySquare, LifeBuoy, BookOpen } from "lucide-react";
+import { Menu, Home, Settings, ActivitySquare, LifeBuoy, BookOpen, Mail } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -71,6 +71,13 @@ export function MobileNav() {
             href="/admin/agent-card-health"
             icon={<ActivitySquare />}
             label="Agent Card Health"
+            onNavigate={close}
+            requiredRoles={["admin"]}
+          />
+          <NavLink
+            href="/admin/support-email-subscriptions"
+            icon={<Mail />}
+            label="Support Mailbox"
             onNavigate={close}
             requiredRoles={["admin"]}
           />
