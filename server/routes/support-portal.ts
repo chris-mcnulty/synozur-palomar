@@ -374,6 +374,16 @@ export function registerSupportPortalRoutes(app: Express) {
         return res.status(404).json({ error: "Article not found" });
       }
       await s.incrementKbArticleViewCount(article.id);
+      try {
+        await s.recordSupportEvent({
+          tenantId: article.tenantId,
+          eventType: "kb_article_view",
+          articleId: article.id,
+          sessionId: (req.query.sessionId as string) || null,
+        });
+      } catch (evtErr) {
+        console.warn("[KB] Failed to record kb_article_view event for", article.id, evtErr);
+      }
       return res.json({
         id: article.id,
         slug: article.slug,

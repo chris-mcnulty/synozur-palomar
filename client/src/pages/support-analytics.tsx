@@ -1,9 +1,12 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Layout } from "@/components/layout/layout";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, Activity, AlertTriangle, Clock, Smile } from "lucide-react";
+import { Loader2, Activity, AlertTriangle, Clock, Smile, ShieldCheck, BookOpen } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import {
   ChartContainer,
   ChartTooltip,
@@ -41,9 +44,29 @@ function formatMinutes(m: number | null | undefined): string {
   return `${(h / 24).toFixed(1)}d`;
 }
 
+interface KbAnalyticsResp {
+  totalDeflectionsThisMonth: number;
+  totalDeflectionsWindow: number;
+  articles: Array<{ id: string; title: string; deflectionsWindow: number }>;
+}
+
 export default function SupportAnalyticsPage() {
+  const { hasAnyRole, isPlatformAdmin } = useAuth();
+  const isAdmin = !!isPlatformAdmin || hasAnyRole(["admin"]);
+
   const { data, isLoading, error } = useQuery<AnalyticsResp>({
     queryKey: ["/api/support/analytics"],
+    staleTime: 60_000,
+  });
+
+  const { data: kb } = useQuery<KbAnalyticsResp>({
+    queryKey: ["/api/support/kb-analytics", { windowDays: "30" }],
+    queryFn: async () => {
+      const r = await fetch("/api/support/kb-analytics?windowDays=30", { credentials: "include" });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    enabled: isAdmin,
     staleTime: 60_000,
   });
 
@@ -72,9 +95,18 @@ export default function SupportAnalyticsPage() {
   return (
     <Layout>
       <div className="p-6 space-y-6" data-testid="page-support-analytics">
-        <div>
-          <h1 className="text-2xl font-semibold">Support analytics</h1>
-          <p className="text-sm text-muted-foreground">Operational health for the last 7 to 30 days. Refreshes every 60 seconds.</p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-semibold">Support analytics</h1>
+            <p className="text-sm text-muted-foreground">Operational health for the last 7 to 30 days. Refreshes every 60 seconds.</p>
+          </div>
+          {isAdmin && (
+            <Link href="/support/kb-analytics">
+              <Button variant="outline" size="sm" data-testid="link-kb-analytics">
+                <BookOpen className="h-4 w-4 mr-2" /> KB analytics
+              </Button>
+            </Link>
+          )}
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -84,6 +116,14 @@ export default function SupportAnalyticsPage() {
           <KpiCard label="Resolved (7d)" value={summary.resolved7d} testId="kpi-resolved" />
           <KpiCard label="SLA breach rate (7d)" value={`${Math.round((summary.breachRate7d || 0) * 100)}%`} icon={AlertTriangle} testId="kpi-breach" />
           <KpiCard label="CSAT (30d)" value={summary.csatAvg30d != null ? summary.csatAvg30d.toFixed(2) : "—"} icon={Smile} testId="kpi-csat" />
+          {isAdmin && (
+            <KpiCard
+              label="KB deflections (this month)"
+              value={kb?.totalDeflectionsThisMonth ?? "—"}
+              icon={ShieldCheck}
+              testId="kpi-deflections"
+            />
+          )}
         </div>
 
         <div className="grid lg:grid-cols-2 gap-4">

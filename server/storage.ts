@@ -152,6 +152,7 @@ export interface IStorage {
   searchSupportTickets(opts: { tenantId?: string | null; q: string; limit?: number }): Promise<Array<SupportTicket & { rank: number; snippet: string | null }>>;
   searchSupportTicketReplies(opts: { tenantId?: string | null; q: string; limit?: number }): Promise<Array<{ id: string; ticketId: string; rank: number; snippet: string | null }>>;
   getSupportAnalytics(tenantId?: string | null): Promise<any>;
+  getSupportKbAnalytics(tenantId: string, windowDays: number): Promise<any>;
   getSupportMetricsForAppKey(tenantId: string, appKeyId: string): Promise<{ open: number; awaitingCustomer: number; breachRate7d: number }>;
 
   // Agent Card Health
@@ -886,6 +887,79 @@ export class DbStorage implements IStorage {
         medianFirstResponseMinutes: rtRow.medianFirstResponseMinutes ?? null,
         medianResolutionMinutes: rtRow.medianResolutionMinutes ?? null,
       },
+    };
+  }
+
+  async getSupportKbAnalytics(tenantId: string, windowDays: number): Promise<any> {
+    const days = Math.max(1, Math.min(365, Math.floor(windowDays || 30)));
+    const windowExpr = sql.raw(`interval '${days} days'`);
+
+    // Per-article rollup: lifetime totals from supportKbArticles + windowed counts from supportEvents.
+    const rows = await db.execute(sql`
+      WITH ev AS (
+        SELECT
+          article_id,
+          SUM(CASE WHEN event_type = 'kb_article_view' THEN 1 ELSE 0 END)::int AS views_window,
+          SUM(CASE WHEN event_type = 'kb_helpful' THEN 1 ELSE 0 END)::int AS helpful_window,
+          SUM(CASE WHEN event_type = 'kb_not_helpful' THEN 1 ELSE 0 END)::int AS not_helpful_window,
+          SUM(CASE WHEN event_type = 'ticket_deflected' THEN 1 ELSE 0 END)::int AS deflections_window
+        FROM support_events
+        WHERE tenant_id = ${tenantId}
+          AND article_id IS NOT NULL
+          AND created_at >= now() - ${windowExpr}
+        GROUP BY article_id
+      )
+      SELECT
+        a.id,
+        a.title,
+        a.slug,
+        a.visibility,
+        a.published_at IS NOT NULL AS "isPublished",
+        a.view_count::int AS "views",
+        a.helpful_count::int AS "helpful",
+        a.not_helpful_count::int AS "notHelpful",
+        COALESCE(ev.views_window, 0)::int AS "viewsWindow",
+        COALESCE(ev.helpful_window, 0)::int AS "helpfulWindow",
+        COALESCE(ev.not_helpful_window, 0)::int AS "notHelpfulWindow",
+        COALESCE(ev.deflections_window, 0)::int AS "deflectionsWindow"
+      FROM support_kb_articles a
+      LEFT JOIN ev ON ev.article_id = a.id
+      WHERE a.tenant_id = ${tenantId}
+      ORDER BY COALESCE(ev.deflections_window, 0) DESC, a.view_count DESC, a.title ASC
+    `);
+    const articles = ((rows as any).rows || rows) as any[];
+
+    // Total deflections this calendar month (in tenant's server time).
+    const monthRow = await db.execute(sql`
+      SELECT COUNT(*)::int AS total
+      FROM support_events
+      WHERE tenant_id = ${tenantId}
+        AND event_type = 'ticket_deflected'
+        AND created_at >= date_trunc('month', now())
+    `);
+    const totalDeflectionsThisMonth = Number(((monthRow as any).rows || monthRow)[0]?.total || 0);
+
+    // Total deflections in the chosen window.
+    const winRow = await db.execute(sql`
+      SELECT COUNT(*)::int AS total
+      FROM support_events
+      WHERE tenant_id = ${tenantId}
+        AND event_type = 'ticket_deflected'
+        AND created_at >= now() - ${windowExpr}
+    `);
+    const totalDeflectionsWindow = Number(((winRow as any).rows || winRow)[0]?.total || 0);
+
+    return {
+      windowDays: days,
+      totalDeflectionsThisMonth,
+      totalDeflectionsWindow,
+      articles: articles.map((r) => {
+        const helpfulSum = (r.helpful || 0) + (r.notHelpful || 0);
+        const helpfulPct = helpfulSum > 0 ? Math.round((r.helpful / helpfulSum) * 100) : null;
+        const helpfulSumWin = (r.helpfulWindow || 0) + (r.notHelpfulWindow || 0);
+        const helpfulPctWindow = helpfulSumWin > 0 ? Math.round((r.helpfulWindow / helpfulSumWin) * 100) : null;
+        return { ...r, helpfulPct, helpfulPctWindow };
+      }),
     };
   }
 

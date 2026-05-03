@@ -25,6 +25,7 @@ import SupportSlaPoliciesAdmin from "@/pages/support-sla-policies";
 import SupportKbAdmin from "@/pages/support-kb-admin";
 import SupportAnalyticsPage from "@/pages/support-analytics";
 import SupportEmailSubscriptionsAdmin from "@/pages/admin/support-email-subscriptions";
+import SupportKbAnalyticsPage from "@/pages/support-kb-analytics";
 import PortalTicket from "@/pages/portal-ticket";
 import PortalLookup from "@/pages/portal-lookup";
 import PortalKb from "@/pages/portal-kb";
@@ -37,12 +38,16 @@ import NotFound from "@/pages/not-found";
 function PermissionGuard({
   children,
   allowedRoles,
+  allowPlatformAdmin = false,
 }: {
   children: React.ReactNode;
   allowedRoles: string[];
+  allowPlatformAdmin?: boolean;
 }) {
-  const { hasAnyRole } = useAuth();
-  if (!hasAnyRole(allowedRoles)) return <Redirect to="/dashboard" />;
+  const { hasAnyRole, isPlatformAdmin } = useAuth();
+  if (!hasAnyRole(allowedRoles) && !(allowPlatformAdmin && isPlatformAdmin)) {
+    return <Redirect to="/dashboard" />;
+  }
   return <>{children}</>;
 }
 
@@ -199,6 +204,13 @@ function Router() {
       </Route>
       <Route path="/support/analytics">
         {user ? <SupportStaffGuard><SupportAnalyticsPage /></SupportStaffGuard> : <Redirect to="/login" />}
+      </Route>
+      <Route path="/support/kb-analytics">
+        {user ? (
+          <PermissionGuard allowedRoles={["admin"]} allowPlatformAdmin>
+            <SupportKbAnalyticsPage />
+          </PermissionGuard>
+        ) : <Redirect to="/login" />}
       </Route>
       <Route component={NotFound} />
     </Switch>
