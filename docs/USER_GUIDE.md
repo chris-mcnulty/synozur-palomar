@@ -1,6 +1,6 @@
-# Constellation User Guide
+# Palomar User Guide
 
-**Welcome to Constellation - The Synozur Consulting Delivery Platform**
+**Welcome to Palomar - The Synozur Consulting Delivery Platform**
 
 Version 2.0 | Last Updated: April 1, 2026
 
@@ -17,7 +17,7 @@ Version 2.0 | Last Updated: April 1, 2026
 7. [AI-Powered Status Reports](#ai-powered-status-reports)
 8. [Portfolio Management](#portfolio-management)
 9. [User Roles](#user-roles)
-10. [Constellation Copilot Agent](#constellation-copilot-agent)
+10. [Palomar Copilot Agent](#constellation-copilot-agent)
 11. [Microsoft Teams Custom Tab](#microsoft-teams-custom-tab)
 12. [Teams Channel Provisioning](#teams-channel-provisioning)
 13. [Executive Narrative Reporting](#executive-narrative-reporting)
@@ -35,9 +35,9 @@ Version 2.0 | Last Updated: April 1, 2026
 
 ## Introduction
 
-### What is Constellation?
+### What is Palomar?
 
-Constellation is a comprehensive Consulting Delivery Platform designed to help organizations manage the entire lifecycle of consulting projects. Built by Synozur, Constellation streamlines operations from initial estimation through final billing, providing tools for resource allocation, time tracking, expense recording, and automated invoice generation.
+Palomar is a comprehensive Consulting Delivery Platform designed to help organizations manage the entire lifecycle of consulting projects. Built by Synozur, Palomar streamlines operations from initial estimation through final billing, providing tools for resource allocation, time tracking, expense recording, and automated invoice generation.
 
 ### Key Features
 
@@ -55,7 +55,7 @@ Constellation is a comprehensive Consulting Delivery Platform designed to help o
 
 ### Who Should Use This Guide?
 
-This guide is designed for all Constellation users, including:
+This guide is designed for all Palomar users, including:
 - Consultants and employees tracking time and expenses
 - Project managers overseeing project delivery
 - Billing administrators managing invoices and reimbursements
@@ -72,11 +72,11 @@ This guide is designed for all Constellation users, including:
 
 If your organization uses Microsoft 365:
 
-1. Navigate to the Constellation login page
+1. Navigate to the Palomar login page
 2. Click **"Sign in with Microsoft"**
 3. Enter your Microsoft 365 credentials
 4. Grant permissions when prompted (first-time only)
-5. You'll be automatically redirected to Constellation
+5. You'll be automatically redirected to Palomar
 
 **Benefits of Microsoft SSO:**
 - No separate password to remember
@@ -88,7 +88,7 @@ If your organization uses Microsoft 365:
 
 For development and testing environments:
 
-1. Navigate to the Constellation login page
+1. Navigate to the Palomar login page
 2. Enter your email address
 3. Enter your password
 4. Click **"Sign In"**
@@ -297,7 +297,7 @@ Program Estimates are a specialized estimate type designed for large, multi-phas
 6. Use the PM Wizard to auto-generate project structure
 
 **Estimate Types:**
-Constellation supports four estimate types:
+Palomar supports four estimate types:
 - **T&M (Time & Materials)**: Billed based on actual hours worked at agreed rates
 - **Fixed Price**: Billed against defined milestones and deliverables
 - **Retainer**: Ongoing monthly engagement with reserved capacity
@@ -474,7 +474,7 @@ Status changes are automatically recorded in the deliverable's history, creating
 
 ### AI-Powered Extraction from Narratives
 
-If you have a project proposal, SOW, or scope document, Constellation can use AI to identify candidate deliverables automatically:
+If you have a project proposal, SOW, or scope document, Palomar can use AI to identify candidate deliverables automatically:
 
 1. Click **Extract from Narrative** on the Deliverables tab
 2. Paste the relevant text from your proposal or SOW into the text area
@@ -492,7 +492,7 @@ Deliverables are automatically included in both AI-generated status reports and 
 
 ## AI-Powered Status Reports
 
-Constellation can generate AI-powered status reports for any project, summarizing recent activity and governance items into a professional narrative.
+Palomar can generate AI-powered status reports for any project, summarizing recent activity and governance items into a professional narrative.
 
 ### Generating a Status Report
 
@@ -545,9 +545,9 @@ Reports are scoped to your project and tenant, so you'll only see reports genera
 
 ---
 
-## Constellation Copilot Agent
+## Palomar Copilot Agent
 
-Constellation includes a Copilot Agent that lets you query your project data conversationally through Microsoft Teams or Microsoft 365 Copilot. Instead of navigating to different pages, you can simply ask questions in natural language.
+Palomar includes a Copilot Agent that lets you query your project data conversationally through Microsoft Teams or Microsoft 365 Copilot. Instead of navigating to different pages, you can simply ask questions in natural language.
 
 ### What You Can Ask
 
@@ -562,13 +562,13 @@ The Copilot Agent can answer questions about:
 
 ### How It Works
 
-The agent uses a Power Platform Custom Connector to call Constellation's MCP server endpoints on your behalf. Your identity flows through from Teams/Copilot to Constellation, so you only see data you're authorized to access based on your role and tenant.
+The agent uses a Power Platform Custom Connector to call Palomar's MCP server endpoints on your behalf. Your identity flows through from Teams/Copilot to Palomar, so you only see data you're authorized to access based on your role and tenant.
 
 ### Getting Started
 
-1. Look for **Constellation Assistant** in your Teams app catalog or Microsoft 365 Copilot
+1. Look for **Palomar Assistant** in your Teams app catalog or Microsoft 365 Copilot
 2. Add it to a chat or channel
-3. Start with a question like "Who am I in Constellation?" or "What are my assignments this week?"
+3. Start with a question like "Who am I in Palomar?" or "What are my assignments this week?"
 
 ### Example Queries
 
@@ -580,28 +580,28 @@ The agent uses a Power Platform Custom Connector to call Constellation's MCP ser
 - "How much have I spent on travel this year?"
 - "Give me a status report summary for project X"
 
-**Note:** The Copilot Agent provides read-only access. To create, edit, or approve records, use the Constellation web application.
+**Note:** The Copilot Agent provides read-only access. To create, edit, or approve records, use the Palomar web application.
 
 ---
 
 ## Microsoft Teams Custom Tab
 
-Starting in version 1.8, Constellation projects can be embedded directly as **Microsoft Teams tabs**, providing in-context project access without leaving Teams.
+Starting in version 1.8, Palomar projects can be embedded directly as **Microsoft Teams tabs**, providing in-context project access without leaving Teams.
 
-### Adding a Constellation Tab
+### Adding a Palomar Tab
 
 1. In your Teams channel, click the **+** button to add a tab
-2. Search for **Constellation** in the app catalog
+2. Search for **Palomar** in the app catalog
 3. Select the project you want to display
 4. The project detail page appears as a tab in your channel
 
 ### Teams Tab Experience
 
-When viewing Constellation inside Teams:
+When viewing Palomar inside Teams:
 - The interface is **chromeless** — no sidebar or top navigation, just the project content
 - All project tabs are available: Overview, Contracts, Delivery, Time, Invoices, RAIDD, Deliverables, Status Reports, and Analytics
 - The view is **read-only** — you can browse all project data but mutating actions (uploading SOWs, editing milestones, changing assignments, etc.) are hidden
-- To make changes, click the link to open the full Constellation web app
+- To make changes, click the link to open the full Palomar web app
 
 ### Authentication
 
@@ -613,11 +613,11 @@ The Teams tab uses your Microsoft identity for single sign-on. The first time yo
 
 ### Creating a Team
 
-You can create a Microsoft Team directly from Constellation:
+You can create a Microsoft Team directly from Palomar:
 
 1. Navigate to a **Project**, **Estimate**, or **Client** detail page
 2. Look for the **"Create Team"** or **"Create Channel"** button in the Microsoft Teams section
-3. Enter a team name — Constellation checks for duplicate names and will warn you if the name is already taken
+3. Enter a team name — Palomar checks for duplicate names and will warn you if the name is already taken
 4. Click **Create** — the system automatically sets you as the team owner and provisions the team in the background
 
 **Important notes:**
@@ -661,7 +661,7 @@ Revenue figures in executive narratives include only **time** and **milestone** 
 
 ### Overview
 
-Page Analytics tracks visits to Constellation's public-facing pages (home, login, signup) and provides platform administrators with visibility into traffic patterns.
+Page Analytics tracks visits to Palomar's public-facing pages (home, login, signup) and provides platform administrators with visibility into traffic patterns.
 
 ### Viewing Analytics
 
@@ -757,7 +757,7 @@ The Portfolio RAIDD page (`/portfolio/raidd`) provides a cross-project view of a
 
 ## User Roles
 
-Constellation uses a six-tier role hierarchy. Each role inherits lower-tier capabilities and adds new permissions.
+Palomar uses a six-tier role hierarchy. Each role inherits lower-tier capabilities and adds new permissions.
 
 ### Employee (Tier 1)
 **Can:**
@@ -922,7 +922,7 @@ Constellation uses a six-tier role hierarchy. Each role inherits lower-tier capa
 
 ### Overview
 
-Constellation integrates seamlessly with your Microsoft 365 environment to enhance collaboration and reduce duplicate data entry.
+Palomar integrates seamlessly with your Microsoft 365 environment to enhance collaboration and reduce duplicate data entry.
 
 ### Features
 
@@ -991,11 +991,11 @@ Constellation integrates seamlessly with your Microsoft 365 environment to enhan
 
 ### Overview
 
-Constellation integrates with HubSpot CRM to bridge the gap between sales pipeline and project delivery. This integration allows you to view CRM deals, import contacts, and link deals to Constellation projects.
+Palomar integrates with HubSpot CRM to bridge the gap between sales pipeline and project delivery. This integration allows you to view CRM deals, import contacts, and link deals to Palomar projects.
 
 ### CRM Deals Page
 
-The CRM Deals page (`/crm/deals`) provides a unified view of your HubSpot pipeline within Constellation.
+The CRM Deals page (`/crm/deals`) provides a unified view of your HubSpot pipeline within Palomar.
 
 **Accessing CRM Deals:**
 1. Navigate to **CRM Deals** from the sidebar (available to Project Managers, Executives, and Administrators)
@@ -1011,24 +1011,24 @@ The CRM Deals page (`/crm/deals`) provides a unified view of your HubSpot pipeli
 
 ### Contact Import
 
-Import HubSpot contacts as Constellation client contacts to avoid duplicate data entry.
+Import HubSpot contacts as Palomar client contacts to avoid duplicate data entry.
 
 **Importing Contacts:**
 1. Open a deal on the CRM Deals page
 2. Click **Import Contacts** to pull associated contacts from HubSpot
 3. Review and confirm the contact details
-4. Contacts are added to the linked Constellation client record
+4. Contacts are added to the linked Palomar client record
 
 ### Deal-to-Project Linking
 
-Link HubSpot deals to Constellation projects for end-to-end visibility from sales to delivery.
+Link HubSpot deals to Palomar projects for end-to-end visibility from sales to delivery.
 
 **Linking a Deal:**
 1. Navigate to CRM Deals
 2. Select a deal from the list
-3. Click **Link to Project** and choose an existing Constellation project (or create a new one)
+3. Click **Link to Project** and choose an existing Palomar project (or create a new one)
 4. Once linked, the project detail page shows the associated deal information
-5. Deal stage changes in HubSpot are reflected in Constellation
+5. Deal stage changes in HubSpot are reflected in Palomar
 
 ### Configuration
 
@@ -1305,7 +1305,7 @@ When reporting problems, please include:
 
 ## Detailed Documentation
 
-This guide provides an overview of Constellation's key features and workflows. For more detailed information, refer to these comprehensive resources:
+This guide provides an overview of Palomar's key features and workflows. For more detailed information, refer to these comprehensive resources:
 
 ### Core Documentation
 

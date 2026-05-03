@@ -1,5 +1,5 @@
 /**
- * Validates the Constellation A2A Agent Card against A2A 1.0 requirements.
+ * Validates the Palomar A2A Agent Card against A2A 1.0 requirements.
  *
  * Reads client/public/.well-known/agent.json and runs the shared
  * validateAgentCard() checks from server/a2a/validate-agent-card.ts.

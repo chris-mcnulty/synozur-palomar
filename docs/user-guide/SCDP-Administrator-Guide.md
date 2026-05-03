@@ -1889,10 +1889,10 @@ The Scheduled Jobs page shows:
 When enabled on a project, the automatic Planner sync:
 - Creates Planner tasks for each project assignment
 - Organizes tasks into buckets by project stage
-- Maps Constellation users to Azure AD accounts
+- Maps Palomar users to Azure AD accounts
 - Syncs status (open → 0%, in_progress → 50%, completed → 100%)
 - Syncs planned start and end dates
-- Includes task notes with Constellation link and hours
+- Includes task notes with Palomar link and hours
 
 **Job Run History Fields:**
 

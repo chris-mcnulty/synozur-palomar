@@ -1,4 +1,4 @@
-# Constellation Product Backlog
+# Palomar Product Backlog
 
 **Last Updated**: April 12, 2026
 **Version**: 6.2 — Copilot Write Activities Phase 0 landed (foundation + client discovery + client create). Phases 3-5 (estimates, HubSpot linkage, Teams channel linkage) tracked below.
@@ -93,7 +93,7 @@ Estimate approval/status transitions, invoice generation, line-item-level edits 
 
 ## ✅ Previously Completed (March 10, 2026)
 
-### MCP Server & Constellation Copilot Agent ✅ COMPLETE
+### MCP Server & Palomar Copilot Agent ✅ COMPLETE
 - [x] MCP server with ~24 read-only GET endpoints under `/mcp`
 - [x] Bearer token authentication via JWKS (v1 + v2 Entra token issuers)
 - [x] Multi-tenant support (Entra `common` authority)
@@ -437,7 +437,7 @@ Invoice PDF files stored in SharePoint/object storage are never removed when a b
 **Status:** Planned — Replit engineering task
 **Effort:** Medium (coordination with Replit engineering)
 
-- [ ] Migrate Constellation hosting from GCP to Azure infrastructure
+- [ ] Migrate Palomar hosting from GCP to Azure infrastructure
 - [ ] Coordinate with Replit engineering team for deployment target change
 - [ ] Validate all environment variables and secrets transfer correctly
 - [ ] Verify database connectivity and performance on Azure

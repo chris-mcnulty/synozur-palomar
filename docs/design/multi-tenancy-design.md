@@ -1,8 +1,8 @@
-# Constellation Multi-Tenancy Architecture Design
+# Palomar Multi-Tenancy Architecture Design
 
 ## Overview
 
-This document outlines the design for converting Constellation from a single-tenant application to a multi-tenant SaaS platform, enabling software subscription offerings in 6-12 months. The design is modeled after Vega's proven multi-tenant architecture.
+This document outlines the design for converting Palomar from a single-tenant application to a multi-tenant SaaS platform, enabling software subscription offerings in 6-12 months. The design is modeled after Vega's proven multi-tenant architecture.
 
 **Document Version:** 1.1  
 **Created:** January 2026  
@@ -36,9 +36,9 @@ Multi-tenancy allows a single application instance to serve multiple independent
 - **Independent Settings**: SSO configuration, vocabulary, preferences per tenant
 - **User Management**: Each tenant manages their own users
 
-### Constellation Multi-Tenancy Goals
+### Palomar Multi-Tenancy Goals
 
-1. **Subscription Readiness**: Enable offering Constellation as a SaaS product
+1. **Subscription Readiness**: Enable offering Palomar as a SaaS product
 2. **Tenant Isolation**: Complete data separation between organizations
 3. **Self-Service Onboarding**: New organizations can sign up and configure their tenant
 4. **Platform Administration**: Central management of all tenants by Synozur
@@ -277,7 +277,7 @@ export const tenantUsers = pgTable("tenant_users", {
   userId: varchar("user_id").notNull().references(() => users.id),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
   
-  // Tenant-specific role (existing Constellation roles)
+  // Tenant-specific role (existing Palomar roles)
   role: varchar("role", { length: 50 }).notNull().default("employee"),
   // admin, billing-admin, pm, employee, executive
   
@@ -453,7 +453,7 @@ async function resolveTenant(req, res, next) {
 
 ### Important Notes
 
-1. **Each Entra tenant maps to one Constellation tenant** via the `azureTenantId` field
+1. **Each Entra tenant maps to one Palomar tenant** via the `azureTenantId` field
 2. **Default slug is NOT used in production** with multiple Entra tenants
 3. **The default slug pattern is only for**:
    - Local development (no Entra auth available)
@@ -563,7 +563,7 @@ All paying plans support co-branding:
 ### Self-Service Signup Flow
 
 ```
-1. User visits Constellation signup page
+1. User visits Palomar signup page
    ↓
 2. Enters email address
    ↓
@@ -654,7 +654,7 @@ async function checkTenantExpirations() {
 
 ### Critical Requirement: Production Continuity
 
-**Synozur's current Constellation instance must remain fully operational throughout the transition.** This is non-negotiable for business continuity.
+**Synozur's current Palomar instance must remain fully operational throughout the transition.** This is non-negotiable for business continuity.
 
 ### Recommended Approach: Parallel Development with Data Migration
 
@@ -664,7 +664,7 @@ Create a new multi-tenant version alongside existing production, then migrate:
 
 ```
 Phase 1: Remix Codebase
-├── Fork/remix current Constellation codebase
+├── Fork/remix current Palomar codebase
 ├── Implement multi-tenancy in parallel branch
 ├── Original production continues uninterrupted
 └── Test multi-tenant version independently
@@ -1005,7 +1005,7 @@ Before production cutover:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ [Tenant Logo] Constellation                                     │
+│ [Tenant Logo] Palomar                                     │
 │                                                                 │
 │ ┌─────────────────┐  Synozur Consulting ▼                       │
 │ │ Tenant Switcher │  ─────────────────────────────              │

@@ -31,7 +31,7 @@ import { SynozurAppSwitcher } from "@/components/synozur-app-switcher";
 import { Aurora } from "@/components/aurora";
 import heroImage from "@assets/Firefly_5c02a715-05d7-48e2-91d7-99c03988b690_1777808195121.jpeg";
 import secondaryImage from "@assets/AdobeStock_189127184_1771187213585.jpeg";
-import constellationLogoWhite from "@assets/Constellation_Logo_-_White_1773876279047.png";
+import constellationLogoWhite from "@assets/Palomar_Logo_-_White_1773876279047.png";
 
 function trackPageView(path: string) {
   try {
@@ -198,20 +198,20 @@ export default function Login() {
       "@type": "Organization",
       name: "Synozur",
       url: "https://www.synozur.com",
-      description: "Synozur is the creator of Constellation, a multi-tenant support platform for modern teams.",
+      description: "Synozur is the creator of Palomar, a multi-tenant support platform for modern teams.",
       brand: {
         "@type": "Brand",
-        name: "Constellation",
+        name: "Palomar",
       },
     },
     {
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
-      name: "Constellation",
+      name: "Palomar",
       applicationCategory: "BusinessApplication",
       operatingSystem: "Web",
       description:
-        "Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, an external API for filing tickets from other applications, SLA tracking, and a knowledge base.",
+        "Palomar by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, an external API for filing tickets from other applications, SLA tracking, and a knowledge base.",
       url: "https://constellation.synozur.com/",
       creator: {
         "@type": "Organization",
@@ -224,26 +224,26 @@ export default function Login() {
   return (
     <>
       <Helmet>
-        <title>Constellation | Synozur Support Platform</title>
+        <title>Palomar | Synozur Support Platform</title>
         <meta
           name="description"
-          content="Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API that lets your other applications file tickets."
+          content="Palomar by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API that lets your other applications file tickets."
         />
         <link rel="canonical" href="https://constellation.synozur.com/" />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://constellation.synozur.com/" />
-        <meta property="og:title" content="Constellation | Synozur Support Platform" />
+        <meta property="og:title" content="Palomar | Synozur Support Platform" />
         <meta
           property="og:description"
-          content="Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API."
+          content="Palomar by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API."
         />
         <meta property="og:image" content="https://constellation.synozur.com/og-image.jpg" />
-        <meta property="og:site_name" content="Constellation by Synozur" />
+        <meta property="og:site_name" content="Palomar by Synozur" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Constellation | Synozur Support Platform" />
+        <meta name="twitter:title" content="Palomar | Synozur Support Platform" />
         <meta
           name="twitter:description"
-          content="Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API."
+          content="Palomar by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API."
         />
         <meta name="twitter:image" content="https://constellation.synozur.com/og-image.jpg" />
         {structuredData.map((schema, i) => (
@@ -260,7 +260,7 @@ export default function Login() {
             <SynozurAppSwitcher currentApp="constellation" forceDark />
             <SynozurLogo className="h-8 w-8" />
             <div>
-              <span className="text-xl font-bold tracking-tight">Constellation</span>
+              <span className="text-xl font-bold tracking-tight">Palomar</span>
               <span className="text-xs text-gray-500 ml-2">by Synozur</span>
             </div>
           </div>
@@ -276,7 +276,7 @@ export default function Login() {
       </nav>
 
       {/* Hero Section */}
-      <section aria-label="Hero — Sign in to Constellation" className="relative pt-16 overflow-hidden">
+      <section aria-label="Hero — Sign in to Palomar" className="relative pt-16 overflow-hidden">
         <div className="absolute inset-0 bg-gray-950" />
         <div
           className="absolute inset-0 bg-cover bg-center opacity-30"
@@ -290,7 +290,7 @@ export default function Login() {
             <div>
               <img
                 src={constellationLogoWhite}
-                alt="Constellation"
+                alt="Palomar"
                 className="hidden lg:block h-14 w-auto mb-6"
               />
               <div className="flex items-center gap-2 mb-5">
@@ -307,7 +307,7 @@ export default function Login() {
                 </span>
               </h1>
               <p className="text-base lg:text-lg text-gray-300 max-w-lg mb-8 leading-relaxed">
-                Constellation unifies email, a no-login customer portal, and a
+                Palomar unifies email, a no-login customer portal, and a
                 first-class API for your other applications — with queues,
                 SLAs, knowledge base, and live analytics in one tenant-aware
                 workspace.
@@ -519,7 +519,7 @@ export default function Login() {
       </section>
 
       {/* Three-Door Spotlight: Agents · Customers · Apps */}
-      <section aria-label="Three ways into Constellation" className="relative py-20 overflow-hidden">
+      <section aria-label="Three ways into Palomar" className="relative py-20 overflow-hidden">
         <div
           className="absolute inset-0 bg-cover bg-center opacity-10"
           style={{ backgroundImage: `url(${secondaryImage})` }}
@@ -667,7 +667,7 @@ export default function Login() {
         <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <SynozurLogo className="h-6 w-6" />
-            <span className="text-sm text-gray-500">Constellation by Synozur</span>
+            <span className="text-sm text-gray-500">Palomar by Synozur</span>
           </div>
           <nav className="flex items-center gap-4 text-xs text-gray-500">
             <a href="https://www.synozur.com" target="_blank" rel="noopener noreferrer" className="hover:text-gray-300 transition-colors">About Synozur</a>

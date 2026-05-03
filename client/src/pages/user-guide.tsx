@@ -23,7 +23,7 @@ export default function UserGuide() {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">User Guide</h1>
             <p className="text-xl text-muted-foreground">
-              Constellation - Synozur Consulting Delivery Platform
+              Palomar - Synozur Consulting Delivery Platform
             </p>
           </div>
         </div>

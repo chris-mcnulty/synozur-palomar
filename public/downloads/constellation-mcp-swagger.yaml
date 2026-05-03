@@ -1,8 +1,8 @@
 swagger: '2.0'
 info:
-  title: Constellation MCP
+  title: Palomar MCP
   description: >-
-    Read-only Model Context Protocol endpoints for Constellation consulting
+    Read-only Model Context Protocol endpoints for Palomar consulting
     delivery platform. Provides tenant-scoped access to projects, assignments,
     time entries, expenses, RAIDD, financials, estimates, and CRM data.
   version: 1.1.0
@@ -18,7 +18,7 @@ paths:
   /me:
     get:
       operationId: GetMyProfile
-      summary: Get my Constellation profile
+      summary: Get my Palomar profile
       description: >-
         Returns the authenticated user's profile including role, tenant, and
         platform role. No special role required.
@@ -744,7 +744,7 @@ paths:
       operationId: GetCrmDealLinkedProjects
       summary: Get projects linked to a CRM deal
       description: >-
-        Returns Constellation projects linked to a specific HubSpot deal.
+        Returns Palomar projects linked to a specific HubSpot deal.
         Requires PM, Admin, or Executive role.
       parameters:
         - name: dealId

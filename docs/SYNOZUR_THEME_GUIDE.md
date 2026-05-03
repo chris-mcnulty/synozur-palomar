@@ -1,6 +1,6 @@
 # Synozur Theme Integration Guide
 
-This guide explains how to use the Synozur brand theme modules across any Synozur application (Constellation, Vega, Nebula, Orion, etc.).
+This guide explains how to use the Synozur brand theme modules across any Synozur application (Palomar, Vega, Nebula, Orion, etc.).
 
 ## Available Themes
 
@@ -11,9 +11,9 @@ This guide explains how to use the Synozur brand theme modules across any Synozu
 | **Navigator's Chart** | `navigators-chart.css` | Direction 2 — clean professional precision, purple as the single deliberate accent. Linear/Notion/Stripe aesthetic. |
 | **Aurora** | `aurora.css` | Direction 3 — gradient as a living presence, lavender-cast surfaces, gradient border utilities. Energetic and marketing-forward. |
 
-## Switching Constellation's Active Theme
+## Switching Palomar's Active Theme
 
-Constellation uses a single theme import in `client/src/index.css`. To switch themes, change the import line:
+Palomar uses a single theme import in `client/src/index.css`. To switch themes, change the import line:
 
 ```css
 /* In client/src/index.css, change this line: */

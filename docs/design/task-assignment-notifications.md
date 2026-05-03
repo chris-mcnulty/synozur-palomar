@@ -105,7 +105,7 @@ receiveTaskNotifications: boolean("receive_task_notifications").default(true),
 
 ### New Assignments Email
 
-**Subject**: `You have [N] new project assignment(s) in Constellation`
+**Subject**: `You have [N] new project assignment(s) in Palomar`
 
 **Body Structure**:
 ```

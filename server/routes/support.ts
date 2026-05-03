@@ -39,7 +39,7 @@ const updateTicketSchema = z.object({
   ticketType: z.enum(TICKET_TYPES).optional(),
 });
 
-const isConstellationAdmin = (role: string): boolean => {
+const isPalomarAdmin = (role: string): boolean => {
   return ['admin', 'billing-admin'].includes(role) || role === 'constellation_admin' || role === 'global_admin';
 };
 
@@ -113,7 +113,7 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
         description,
         priority,
         metadata: metadata || null,
-        applicationSource: 'Constellation',
+        applicationSource: 'Palomar',
         ticketType: ticketType || 'incident',
         source: 'web',
         queueId: queueId || null,
@@ -161,7 +161,7 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
               const ticketUrl = `${APP_URL}/support`;
               
               const taskTitle = `[#${ticket.ticketNumber}] ${ticket.subject}`;
-              const taskDescription = `Priority: ${ticket.priority}\nCategory: ${ticket.category.replace('_', ' ')}\nRequester: ${user.firstName || ''} ${user.lastName || ''} (${user.email})\n\n${ticket.description}\n\nView in Constellation: ${ticketUrl}`;
+              const taskDescription = `Priority: ${ticket.priority}\nCategory: ${ticket.category.replace('_', ' ')}\nRequester: ${user.firstName || ''} ${user.lastName || ''} (${user.email})\n\n${ticket.description}\n\nView in Palomar: ${ticketUrl}`;
               
               const plannerTask = await plannerService.createTask({
                 planId: tenant.supportPlannerPlanId,
@@ -563,9 +563,9 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
               const { getUncachableSendGridClient } = await import("../services/sendgrid-client");
               const { client: sgClient, fromEmail } = await getUncachableSendGridClient();
               await sgClient.send({
-                to: "Constellation@synozur.com",
+                to: "Palomar@synozur.com",
                 from: fromEmail,
-                subject: `[Constellation Support] Ticket #${ticket.ticketNumber} closed by submitter`,
+                subject: `[Palomar Support] Ticket #${ticket.ticketNumber} closed by submitter`,
                 html: `<p>Ticket #${ticket.ticketNumber} "<strong>${ticket.subject}</strong>" was closed by the submitter: ${ownerUser.firstName || ''} ${ownerUser.lastName || ''} (${ownerUser.email}).</p>`,
               });
               console.log(`[SUPPORT] Notified support team that ticket #${ticket.ticketNumber} was closed by submitter`);
@@ -743,7 +743,7 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
           const requesterEmail = requester?.email || 'unknown';
 
           const taskTitle = `[#${ticket.ticketNumber}] ${ticket.subject}`;
-          const taskDescription = `Priority: ${ticket.priority}\nCategory: ${ticket.category.replace('_', ' ')}\nRequester: ${requesterName} (${requesterEmail})\n\n${ticket.description}\n\nView in Constellation: ${ticketUrl}`;
+          const taskDescription = `Priority: ${ticket.priority}\nCategory: ${ticket.category.replace('_', ' ')}\nRequester: ${requesterName} (${requesterEmail})\n\n${ticket.description}\n\nView in Palomar: ${ticketUrl}`;
 
           const plannerTask = await plannerService.createTask({
             planId: tenant.supportPlannerPlanId,

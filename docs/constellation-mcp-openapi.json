@@ -1,8 +1,8 @@
 {
   "swagger": "2.0",
   "info": {
-    "title": "Constellation MCP",
-    "description": "Model Context Protocol endpoints for Constellation consulting delivery platform. Read endpoints at /mcp/* provide tenant-scoped access to projects, assignments, time entries, expenses, RAIDD, financials, and CRM data. Write endpoints at /mcp/v1/* (Phase 0 \u2014 Phases 0\u20135: clients, estimates, HubSpot linkage, Teams linkage) are gated by the MCP_WRITES_ENABLED feature flag and require an X-Idempotency-Key header.",
+    "title": "Palomar MCP",
+    "description": "Model Context Protocol endpoints for Palomar consulting delivery platform. Read endpoints at /mcp/* provide tenant-scoped access to projects, assignments, time entries, expenses, RAIDD, financials, and CRM data. Write endpoints at /mcp/v1/* (Phase 0 \u2014 Phases 0\u20135: clients, estimates, HubSpot linkage, Teams linkage) are gated by the MCP_WRITES_ENABLED feature flag and require an X-Idempotency-Key header.",
     "version": "1.2.0"
   },
   "host": "constellation.synozur.com",
@@ -20,7 +20,7 @@
     "/me": {
       "get": {
         "operationId": "GetMyProfile",
-        "summary": "Get my Constellation profile",
+        "summary": "Get my Palomar profile",
         "description": "Returns the authenticated user's profile including role, tenant, and platform role. No special role required.",
         "responses": {
           "200": {
@@ -898,7 +898,7 @@
       "get": {
         "operationId": "GetCrmDealLinkedProjects",
         "summary": "Get projects linked to a CRM deal",
-        "description": "Returns Constellation projects linked to a specific HubSpot deal. Requires PM, Admin, or Executive role.",
+        "description": "Returns Palomar projects linked to a specific HubSpot deal. Requires PM, Admin, or Executive role.",
         "parameters": [
           {
             "name": "dealId",
@@ -2558,7 +2558,7 @@
       "authorizationUrl": "https://login.microsoftonline.com",
       "tokenUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       "scopes": {
-        "api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6/access_as_user": "Access Constellation MCP as signed-in user"
+        "api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6/access_as_user": "Access Palomar MCP as signed-in user"
       }
     }
   },

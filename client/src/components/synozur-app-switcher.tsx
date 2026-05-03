@@ -30,7 +30,7 @@ const SYNOZUR_APPS = [
   },
   {
     id: "constellation",
-    name: "Constellation",
+    name: "Palomar",
     tagline: "Delivery & Financial Management",
     description: "Time, cost, progress tracking with estimates, invoicing, and reporting.",
     url: "https://constellation.synozur.com",

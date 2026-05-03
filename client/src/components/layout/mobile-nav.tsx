@@ -55,7 +55,7 @@ export function MobileNav() {
       </SheetTrigger>
       <SheetContent side="left" className="w-72">
         <SheetHeader>
-          <SheetTitle>Constellation</SheetTitle>
+          <SheetTitle>Palomar</SheetTitle>
         </SheetHeader>
         <nav className="mt-4 space-y-1">
           <NavLink href="/dashboard" icon={<Home />} label="Dashboard" onNavigate={close} />

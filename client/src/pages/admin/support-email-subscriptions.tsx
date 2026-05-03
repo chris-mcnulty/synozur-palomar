@@ -108,7 +108,7 @@ export default function SupportEmailSubscriptionsAdmin() {
             <Mail className="h-5 w-5" /> Support Mailbox Subscriptions
           </h1>
           <p className="text-sm text-muted-foreground">
-            Wire a shared Microsoft 365 mailbox (e.g. <code>Constellation@synozur.com</code>) into the
+            Wire a shared Microsoft 365 mailbox (e.g. <code>Palomar@synozur.com</code>) into the
             ticket inbox. Inbound mail will be turned into tickets automatically.
           </p>
         </div>
@@ -252,7 +252,7 @@ export default function SupportEmailSubscriptionsAdmin() {
                       <FormLabel>Mailbox address</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="Constellation@synozur.com"
+                          placeholder="Palomar@synozur.com"
                           {...field}
                           data-testid="input-mailbox"
                         />

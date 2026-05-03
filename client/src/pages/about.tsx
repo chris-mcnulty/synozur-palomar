@@ -88,7 +88,7 @@ export default function About() {
               <p className="text-lg font-semibold text-primary mb-1">{activeTenant.name}</p>
             )}
             <p className="text-lg text-muted-foreground font-medium">{companyName}</p>
-            <h1 className="text-3xl font-bold tracking-tight">Constellation</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Palomar</h1>
             <p className="text-xl text-muted-foreground">
               Synozur Consulting Delivery Platform{" "}
               <Tooltip>
@@ -138,10 +138,10 @@ export default function About() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <p className="text-sm font-medium">About Constellation</p>
+                <p className="text-sm font-medium">About Palomar</p>
                 <p className="text-sm text-muted-foreground">
                   A comprehensive consulting delivery platform for managing the entire lifecycle 
-                  of consulting projects. From initial estimation through final billing, Constellation 
+                  of consulting projects. From initial estimation through final billing, Palomar 
                   streamlines operations with features for resource allocation, time tracking, 
                   expense recording, and automated invoice generation.
                 </p>

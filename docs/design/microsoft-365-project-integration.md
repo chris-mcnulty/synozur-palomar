@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the design for integrating Constellation with Microsoft 365, **prioritizing bidirectional Planner synchronization first**, with Teams/Channel provisioning as a secondary feature.
+This document outlines the design for integrating Palomar with Microsoft 365, **prioritizing bidirectional Planner synchronization first**, with Teams/Channel provisioning as a secondary feature.
 
 ### Priority Order (Revised January 2026)
 

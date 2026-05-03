@@ -60,7 +60,7 @@ export class EmailNotificationService {
         to: to.email,
         from: {
           email: fromEmail,
-          name: 'Constellation (SCDP)'
+          name: 'Palomar (SCDP)'
         },
         subject,
         html: body
@@ -217,7 +217,7 @@ export class EmailNotificationService {
    */
   async sendTestEmail(recipient: EmailRecipient, branding?: TenantBranding): Promise<void> {
     console.log("[EMAIL_SERVICE] sendTestEmail called with branding:", JSON.stringify(branding, null, 2));
-    const subject = `Test Email from ${branding?.companyName || 'Constellation'}`;
+    const subject = `Test Email from ${branding?.companyName || 'Palomar'}`;
     const header = getEmailHeader(branding);
     console.log("[EMAIL_SERVICE] Generated header HTML:", header ? header.substring(0, 200) + '...' : '(empty)');
     const testButton = `

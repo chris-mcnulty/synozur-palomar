@@ -1,8 +1,8 @@
-# Constellation MCP Server (v0 — Read-Only)
+# Palomar MCP Server (v0 — Read-Only)
 
 ## Purpose
 
-The MCP (Model Context Protocol) surface provides read-only access to Constellation data for Microsoft 365 Copilot and Copilot Studio agents. It exposes a set of GET endpoints under `/mcp` that wrap existing Constellation services without reimplementing business logic.
+The MCP (Model Context Protocol) surface provides read-only access to Palomar data for Microsoft 365 Copilot and Copilot Studio agents. It exposes a set of GET endpoints under `/mcp` that wrap existing Palomar services without reimplementing business logic.
 
 This is **v0 — read-only**. No create, update, delete, or approval operations are available through these endpoints. Write operations will be introduced in a future version under a separate prefix or version namespace.
 
@@ -10,14 +10,14 @@ This is **v0 — read-only**. No create, update, delete, or approval operations 
 
 All `/mcp` endpoints support two authentication methods:
 
-- **Session-based auth** via the `x-session-id` header (for browser / Constellation UI calls)
-- **Bearer token auth** via `Authorization: Bearer <JWT>` header (for Power Platform Custom Connectors / Copilot Studio). JWTs are validated against the Constellation Entra app registration using JWKS. Implemented in `server/auth/mcp-bearer-auth.ts`.
+- **Session-based auth** via the `x-session-id` header (for browser / Palomar UI calls)
+- **Bearer token auth** via `Authorization: Bearer <JWT>` header (for Power Platform Custom Connectors / Copilot Studio). JWTs are validated against the Palomar Entra app registration using JWKS. Implemented in `server/auth/mcp-bearer-auth.ts`.
 
 Tenant isolation is enforced automatically — users only see data for their active tenant.
 
 ## RBAC (Role-Based Access Control)
 
-Existing Constellation roles are honored. Each endpoint is gated to the minimum required role(s):
+Existing Palomar roles are honored. Each endpoint is gated to the minimum required role(s):
 
 | Role | Access |
 |------|--------|
@@ -36,7 +36,7 @@ Platform admins (`global_admin`, `constellation_admin`) inherit admin-level acce
 
 | Method | Path | Description | Roles |
 |--------|------|-------------|-------|
-| GET | `/mcp/me` | Current user profile and Constellation roles | All authenticated |
+| GET | `/mcp/me` | Current user profile and Palomar roles | All authenticated |
 
 ### Personal Data
 
@@ -136,6 +136,6 @@ Errors return the appropriate HTTP status code with:
 To connect these endpoints to a Copilot Studio agent:
 
 1. Create a Custom Connector in Power Platform using the OpenAPI spec at `docs/constellation-mcp-openapi.json`
-2. Configure OAuth 2.0 using the Constellation Entra app registration (see `docs/MCP_CONNECTOR_SETUP.md`)
+2. Configure OAuth 2.0 using the Palomar Entra app registration (see `docs/MCP_CONNECTOR_SETUP.md`)
 3. The connector automatically passes the user's bearer token, ensuring proper RBAC and tenant scoping
 4. Add actions as tools in your Copilot Studio agent — all operations are available

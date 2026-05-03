@@ -68,7 +68,7 @@ function Router() {
 
   useEffect(() => {
     const isDevelopment = import.meta.env.MODE === "development";
-    const baseTitle = "Constellation | Synozur Support Platform";
+    const baseTitle = "Palomar | Synozur Support Platform";
     document.title = isDevelopment ? `Development - ${baseTitle}` : baseTitle;
   }, []);
 

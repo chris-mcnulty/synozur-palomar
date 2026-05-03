@@ -10,12 +10,12 @@
     "termsOfUseUrl": "https://www.synozur.com/terms"
   },
   "name": {
-    "short": "Constellation",
-    "full": "Constellation - Synozur Consulting Delivery Platform"
+    "short": "Palomar",
+    "full": "Palomar - Synozur Consulting Delivery Platform"
   },
   "description": {
-    "short": "View project dashboards and status reports from Constellation.",
-    "full": "Constellation is the Synozur Consulting Delivery Platform (SCDP). This tab lets you view project dashboards, status reports, RAIDD logs, financial metrics, and team performance data directly inside Microsoft Teams."
+    "short": "View project dashboards and status reports from Palomar.",
+    "full": "Palomar is the Synozur Consulting Delivery Platform (SCDP). This tab lets you view project dashboards, status reports, RAIDD logs, financial metrics, and team performance data directly inside Microsoft Teams."
   },
   "icons": {
     "color": "color.png",

@@ -1,6 +1,6 @@
 # AI Estimate Generation — Grounding Document
 
-**Purpose:** This document provides the reference context for Constellation's AI-powered estimate generation feature. When a user uploads a narrative description of a project proposal, the AI uses this grounding document to select appropriate roles, estimate hours, assign contingency factors, and produce a structured estimate with line items.
+**Purpose:** This document provides the reference context for Palomar's AI-powered estimate generation feature. When a user uploads a narrative description of a project proposal, the AI uses this grounding document to select appropriate roles, estimate hours, assign contingency factors, and produce a structured estimate with line items.
 
 ---
 

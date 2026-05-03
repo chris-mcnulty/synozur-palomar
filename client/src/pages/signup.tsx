@@ -89,7 +89,7 @@ export default function Signup() {
       }
       queryClient.setQueryData(["/api/auth/user"], data);
       toast({
-        title: "Welcome to Constellation!",
+        title: "Welcome to Palomar!",
         description: `Your organization "${organizationName}" has been created.`,
       });
       navigate("/");
@@ -142,7 +142,7 @@ export default function Signup() {
           <div className="flex items-center gap-3 mb-6">
             <SynozurLogo className="h-12 w-12" />
             <div>
-              <h1 className="text-3xl font-bold tracking-tight">Constellation</h1>
+              <h1 className="text-3xl font-bold tracking-tight">Palomar</h1>
               <p className="text-sm text-muted-foreground">by Synozur</p>
             </div>
           </div>
@@ -187,7 +187,7 @@ export default function Signup() {
         <div className="flex items-center gap-3 mb-8 lg:hidden">
           <SynozurLogo className="h-10 w-10" />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Constellation</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Palomar</h1>
             <p className="text-xs text-muted-foreground">by Synozur</p>
           </div>
         </div>

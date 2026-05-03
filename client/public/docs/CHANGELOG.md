@@ -1,8 +1,8 @@
-# Constellation Changelog
+# Palomar Changelog
 
 **Synozur Consulting Delivery Platform (SCDP)**
 
-Version history and release notes for Constellation, organized from newest to oldest releases.
+Version history and release notes for Palomar, organized from newest to oldest releases.
 
 ---
 
@@ -23,7 +23,7 @@ Version history and release notes for Constellation, organized from newest to ol
 **Status:** Production Release  
 **Codename:** Nebula
 
-Version 2.0 is a major milestone for Constellation. March 2026 delivered a sweeping set of enhancements across executive reporting, Microsoft Teams provisioning, the Nebula visual design system, AI-powered features, page analytics, and dozens of quality-of-life improvements and bug fixes.
+Version 2.0 is a major milestone for Palomar. March 2026 delivered a sweeping set of enhancements across executive reporting, Microsoft Teams provisioning, the Nebula visual design system, AI-powered features, page analytics, and dozens of quality-of-life improvements and bug fixes.
 
 #### Executive Narrative & Leadership Reporting
 
@@ -136,7 +136,7 @@ This release adds Microsoft Teams Custom Tab integration for embedded project ac
 #### New Features
 
 **Microsoft Teams Custom Tab Integration**
-- Constellation projects now embed directly as **Microsoft Teams tabs** for seamless in-context access
+- Palomar projects now embed directly as **Microsoft Teams tabs** for seamless in-context access
 - Chromeless layout automatically applied when running inside Teams — no sidebar, header, or navigation chrome
 - Tab deep-linking via `?tab=` parameter supports all project tabs: overview, contracts, delivery, time, invoices, raidd, deliverables, status-reports, and analytics
 - **Read-only enforcement** in embed mode — all mutating actions (SOW upload/approve/edit/delete, epic/milestone/workstream buttons, team membership, assignment status, payment milestones, rate overrides, retainer management, Quick Milestone Invoice) are hidden
@@ -182,13 +182,13 @@ This release adds Microsoft Teams Custom Tab integration for embedded project ac
 **Status:** Production Release  
 **Codename:** Copilot Agent & AI Report Persistence
 
-This release introduces the Constellation Copilot Agent for Microsoft 365, enabling conversational access to project data through Microsoft Teams and Copilot Studio. It also adds persistent status report storage, so AI-generated text and PPTX reports are saved to the database with full lifecycle management, and expands the MCP server to ~24 endpoints. AI model support is upgraded to GPT-5.4 via Azure AI Foundry, and SharePoint Embedded document storage is now fully integrated.
+This release introduces the Palomar Copilot Agent for Microsoft 365, enabling conversational access to project data through Microsoft Teams and Copilot Studio. It also adds persistent status report storage, so AI-generated text and PPTX reports are saved to the database with full lifecycle management, and expands the MCP server to ~24 endpoints. AI model support is upgraded to GPT-5.4 via Azure AI Foundry, and SharePoint Embedded document storage is now fully integrated.
 
 #### ✨ New Features
 
-**Constellation Copilot Agent**
-- New **Copilot Studio agent** for querying Constellation data conversationally through Microsoft Teams and Microsoft 365 Copilot
-- Power Platform Custom Connector backed by the Constellation MCP server (~24 read-only endpoints)
+**Palomar Copilot Agent**
+- New **Copilot Studio agent** for querying Palomar data conversationally through Microsoft Teams and Microsoft 365 Copilot
+- Power Platform Custom Connector backed by the Palomar MCP server (~24 read-only endpoints)
 - OAuth 2.0 bearer token authentication with JWT validation via JWKS against Entra ID app registration
 - Multi-tenant support — users from any Entra directory can authenticate
 - Natural language queries for assignments, time entries, expenses, projects, RAIDD, deliverables, estimates, invoices, CRM deals, and status reports
@@ -515,7 +515,7 @@ This release introduces AI-powered help chat, a "What's New" update notification
 
 **AI-Powered Help Chat**
 - Added a floating help chat widget accessible from every page
-- AI assistant answers questions about Constellation features and navigation
+- AI assistant answers questions about Palomar features and navigation
 - Provides contextual navigation suggestions with direct links
 - Understands platform capabilities including time tracking, expenses, invoicing, and reporting
 - Conversation history maintained within each session
@@ -576,10 +576,10 @@ This release focuses on scheduled job monitoring, automated Microsoft Planner sy
 - Automatic sync every 30 minutes for all projects with `syncEnabled=true`
 - Handles deleted Planner tasks by automatically recreating them
 - Task creation with proper bucket mapping based on project stages
-- User assignment mapping between Constellation and Azure AD users
+- User assignment mapping between Palomar and Azure AD users
 - Bidirectional status synchronization (open/in_progress/completed ↔ percent complete)
 - Date synchronization for planned start and end dates
-- Task notes include Constellation project link and hours allocation
+- Task notes include Palomar project link and hours allocation
 - Comprehensive error handling and logging
 - Manual trigger endpoint for on-demand synchronization
 - Job run history visible in scheduled jobs admin UI
@@ -609,7 +609,7 @@ This release focuses on scheduled job monitoring, automated Microsoft Planner sy
 **Status:** Production Release  
 **Codename:** Multi-Tenant SaaS Platform
 
-This major release transforms Constellation from a single-tenant application into a full multi-tenant SaaS platform, enabling multiple organizations to operate independently on shared infrastructure.
+This major release transforms Palomar from a single-tenant application into a full multi-tenant SaaS platform, enabling multiple organizations to operate independently on shared infrastructure.
 
 #### ✨ New Features
 
@@ -941,7 +941,7 @@ This release focuses on comprehensive financial management capabilities includin
 
 ## Release Schedule
 
-Constellation follows a continuous delivery model with regular feature releases:
+Palomar follows a continuous delivery model with regular feature releases:
 
 - **Major Releases:** Quarterly (includes significant new features)
 - **Minor Releases:** Monthly (includes enhancements and bug fixes)
@@ -971,7 +971,7 @@ When reporting issues, please include:
 - Browser type and version
 
 ### Feature Requests
-Have ideas for improving Constellation? Contact your administrator or reach out to the Synozur team to discuss potential enhancements.
+Have ideas for improving Palomar? Contact your administrator or reach out to the Synozur team to discuss potential enhancements.
 
 ---
 

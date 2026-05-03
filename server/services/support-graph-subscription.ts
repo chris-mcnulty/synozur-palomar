@@ -2,7 +2,7 @@
  * Microsoft Graph mail subscription pipeline for inbound support email.
  *
  * Wires a Graph change-notification subscription onto a tenant's support
- * mailbox (e.g. Constellation@synozur.com). When Graph fires a notification,
+ * mailbox (e.g. Palomar@synozur.com). When Graph fires a notification,
  * we fetch the message + attachments and POST them into the existing
  * /api/support/email-inbound endpoint (with a valid HMAC signature) so all
  * inbound paths share the same routing/threading logic.
@@ -88,7 +88,7 @@ async function graphFetch<T = unknown>(token: string, url: string, init: Request
 export interface CreateSubscriptionInput {
   tenantId: string;
   azureTenantId: string;
-  mailbox: string;            // e.g. Constellation@synozur.com
+  mailbox: string;            // e.g. Palomar@synozur.com
   notificationUrl: string;    // public URL pointing at /api/support/graph/notifications
   lifetimeMinutes?: number;   // capped at 4230 by Graph for mail; default 60
 }

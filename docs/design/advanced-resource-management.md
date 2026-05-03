@@ -24,7 +24,7 @@
 
 ## Overview
 
-Advanced Resource Management extends Constellation's existing project assignment system with three key capabilities:
+Advanced Resource Management extends Palomar's existing project assignment system with three key capabilities:
 
 1. **Multi-role mapping** — Each person can be mapped to multiple generic roles they are capable of filling (e.g., a Senior Consultant who can also serve as a Business Analyst or Project Lead).
 2. **Smart assignment suggestions** — When staffing a project, the system suggests candidates based on role capability, availability, and cost variance against the estimate.
@@ -138,19 +138,19 @@ When suggesting candidates for a role, the system compares each person's cost ra
 
 **Effort:** ~2-3 days
 
-### Outbound Sync Changes (Constellation → Planner)
+### Outbound Sync Changes (Palomar → Planner)
 
 When syncing an allocation that has `roleId` but no `personId` (generic role assignment):
 
 1. **Task title** includes the role name: `"[Senior Consultant] Week 3 — Requirements Analysis"`
-2. **Task notes** include: `"ROLE: Senior Consultant"` alongside the existing Constellation link and hours
+2. **Task notes** include: `"ROLE: Senior Consultant"` alongside the existing Palomar link and hours
 3. **Task stays unassigned** in Planner (no Azure user to map to) — correct behavior
 
 ### Sync Field Whitelist
 
-Define explicit ownership of fields between Constellation and Planner:
+Define explicit ownership of fields between Palomar and Planner:
 
-| Constellation-Owned (never overwritten by inbound sync) | Planner-Owned (sync back from Planner) |
+| Palomar-Owned (never overwritten by inbound sync) | Planner-Owned (sync back from Planner) |
 |----------------------------------------------------------|----------------------------------------|
 | roleId | percentComplete → status mapping |
 | personId | startDateTime → plannedStartDate |
@@ -161,7 +161,7 @@ Define explicit ownership of fields between Constellation and Planner:
 | estimateLineItemId | |
 | weekNumber | |
 
-This whitelist is enforced in the sync logic. When bidirectional sync (Phase 2 of Planner integration) is built, it reads updates from Planner but only writes the Planner-owned fields back to Constellation. All role, person, and financial data remains under Constellation's control.
+This whitelist is enforced in the sync logic. When bidirectional sync (Phase 2 of Planner integration) is built, it reads updates from Planner but only writes the Planner-owned fields back to Palomar. All role, person, and financial data remains under Palomar's control.
 
 ### Implementation Notes
 

@@ -293,8 +293,8 @@ async function sendAdminAlert(result: AgentCardHealthResult, isReminder: boolean
   const reminderPrefix = isReminder ? ' (Reminder — Still Failing)' : '';
   const subject =
     result.status === 'invalid'
-      ? `[Constellation] Agent Card Health Check Failed${reminderPrefix} — Validation Errors Detected`
-      : `[Constellation] Agent Card Health Check Error${reminderPrefix} — Endpoint Unreachable or Failed`;
+      ? `[Palomar] Agent Card Health Check Failed${reminderPrefix} — Validation Errors Detected`
+      : `[Palomar] Agent Card Health Check Error${reminderPrefix} — Endpoint Unreachable or Failed`;
 
   const safeCheckedAt = result.checkedAt || new Date().toISOString();
   const safeMessage = result.message || 'Unknown error';
@@ -337,7 +337,7 @@ async function sendAdminAlert(result: AgentCardHealthResult, isReminder: boolean
       `}
       <hr style="margin: 24px 0; border: none; border-top: 1px solid #e5e7eb;" />
       <p style="font-size: 12px; color: #6b7280;">
-        This is an automated alert from the Constellation platform scheduler.
+        This is an automated alert from the Palomar platform scheduler.
         Alerts are sent once per failure event and then at most once every ${cooldownLabel} while the issue persists.
         Once the issue is resolved and the next hourly check passes, the alert state will be cleared automatically.
       </p>
@@ -351,7 +351,7 @@ async function sendAdminAlert(result: AgentCardHealthResult, isReminder: boolean
       adminEmails.map(email =>
         client.send({
           to: email,
-          from: { email: fromEmail, name: 'Constellation (SCDP)' },
+          from: { email: fromEmail, name: 'Palomar (SCDP)' },
           subject,
           html: body,
         })

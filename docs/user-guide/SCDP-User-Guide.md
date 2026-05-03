@@ -929,7 +929,7 @@ When auto-sync is enabled:
   - In Progress → 50% complete
   - Completed → 100% complete
 - Syncs planned start and end dates
-- Includes task notes with Constellation link and hours allocation
+- Includes task notes with Palomar link and hours allocation
 
 **Manual Sync:**
 
@@ -945,12 +945,12 @@ Each synced task includes:
 - **Bucket:** Assigned based on project stage
 - **Dates:** Planned start and end dates
 - **Assignee:** Mapped to Azure AD user (if email matches)
-- **Notes:** Link back to Constellation + allocated hours
+- **Notes:** Link back to Palomar + allocated hours
 
 **User Mapping:**
 
 For team members to be assigned tasks in Planner:
-- Their Constellation email must match their Azure AD email
+- Their Palomar email must match their Azure AD email
 - Or an explicit Azure AD mapping must be configured
 - Unmapped users create tasks without assignees
 

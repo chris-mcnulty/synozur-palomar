@@ -528,7 +528,7 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
   // ===== Inbound attachment download (agent console) =====
   // Authorization mirrors /api/support/tickets/:id: only the ticket owner
-  // (or a Constellation/global support admin) may list/download attachments.
+  // (or a Palomar/global support admin) may list/download attachments.
   const ensureTicketAccess = (req: Request, res: Response, t: { tenantId: string; userId: string | null }): boolean => {
     const u = (req as Request & { user?: { id?: string; role?: string; platformRole?: string } }).user;
     if (!u) { res.status(401).json({ error: "Authentication required" }); return false; }

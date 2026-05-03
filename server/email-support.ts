@@ -4,11 +4,11 @@ import crypto from "crypto";
 
 const APP_URL = process.env.APP_PUBLIC_URL || 'https://constellation.synozur.com';
 
-const SUPPORT_NOTIFICATION_EMAIL = "Constellation@synozur.com";
+const SUPPORT_NOTIFICATION_EMAIL = "Palomar@synozur.com";
 
 // Domain used for the per-ticket Reply-To address. The MX for this domain
 // must route to whatever delivers messages into /api/support/email-inbound
-// (e.g. Microsoft Graph subscription on Constellation@synozur.com).
+// (e.g. Microsoft Graph subscription on Palomar@synozur.com).
 export const SUPPORT_REPLY_DOMAIN = process.env.SUPPORT_REPLY_DOMAIN || "support.synozur.com";
 
 function buildPortalUrl(ticket: SupportTicket): string {
@@ -287,7 +287,7 @@ export async function sendSupportTicketReplyNotification(
   const msg = {
     to: recipient.email,
     from: fromEmail,
-    subject: `[Constellation Support] New reply on ticket #${ticket.ticketNumber}: ${ticket.subject}`,
+    subject: `[Palomar Support] New reply on ticket #${ticket.ticketNumber}: ${ticket.subject}`,
     html: `
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background:#1d4ed8;color:#fff;padding:20px;">
@@ -319,7 +319,7 @@ export async function sendSupportTicketNotification(
   const msg = {
     to: SUPPORT_NOTIFICATION_EMAIL,
     from: fromEmail,
-    subject: `[Constellation Support] New ${ticket.priority} ${ticket.category.replace('_', ' ')} - Ticket #${ticket.ticketNumber}`,
+    subject: `[Palomar Support] New ${ticket.priority} ${ticket.category.replace('_', ' ')} - Ticket #${ticket.ticketNumber}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -338,14 +338,14 @@ export async function sendSupportTicketNotification(
                   <tr>
                     <td style="padding: 30px 40px;">
                       <table style="width: 100%; border-collapse: collapse; margin: 0 0 20px;">
-                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">Application</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">Constellation</td></tr>
+                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">Application</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">Palomar</td></tr>
                         <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">User</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">${userName} (${user.email})</td></tr>
                         <tr><td style="padding: 8px 12px; font-size: 13px; color: #888;">Subject</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0;">${ticket.subject}</td></tr>
                       </table>
                       <div style="padding: 16px; background: #111; border-radius: 8px; margin: 0 0 20px;">
                         <p style="margin: 0; font-size: 13px; color: #ccc; white-space: pre-wrap;">${ticket.description}</p>
                       </div>
-                      <a href="${APP_URL}/support" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View in Constellation</a>
+                      <a href="${APP_URL}/support" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View in Palomar</a>
                     </td>
                   </tr>
                 </table>

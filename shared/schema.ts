@@ -481,7 +481,7 @@ export const supportTickets = pgTable("support_tickets", {
   status: text("status").notNull().default("new"),
   assignedTo: varchar("assigned_to").references(() => users.id, { onDelete: 'set null' }),
   metadata: jsonb("metadata"),
-  applicationSource: text("application_source").notNull().default("Constellation"),
+  applicationSource: text("application_source").notNull().default("Palomar"),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`now()`).notNull(),
   resolvedAt: timestamp("resolved_at"),

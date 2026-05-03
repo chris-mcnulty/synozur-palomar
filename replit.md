@@ -1,7 +1,7 @@
-# Constellation - Synozur Consulting Delivery Platform (SCDP)
+# Palomar - Synozur Consulting Delivery Platform (SCDP)
 
 ## Overview
-Constellation is a multi-tenant consulting/delivery management platform focused on the support and SLA-tracked work that consulting practices need around their delivery engagements. The codebase has been stripped down to the essentials: SSO/auth, multi-tenancy, support ticketing (queues, SLAs, KB articles, replies, watchers, activity, Planner sync), system settings, scheduled job tracking, agent card health monitoring, and lightweight analytics.
+Palomar is a multi-tenant consulting/delivery management platform focused on the support and SLA-tracked work that consulting practices need around their delivery engagements. The codebase has been stripped down to the essentials: SSO/auth, multi-tenancy, support ticketing (queues, SLAs, KB articles, replies, watchers, activity, Planner sync), system settings, scheduled job tracking, agent card health monitoring, and lightweight analytics.
 
 This is a slim foundation intended to be extended with new domain features. The previous full delivery suite (estimates, projects, time entries, expenses, invoices, deliverables, RAIDD, AI narrative generation, Teams automation, MCP server, CRM sync, etc.) has been removed.
 
