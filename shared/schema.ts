@@ -111,6 +111,12 @@ export const tenants = pgTable("tenants", {
   connectorSharePoint: boolean("connector_sharepoint").default(false),
   connectorOutlook: boolean("connector_outlook").default(false),
   connectorPlanner: boolean("connector_planner").default(false),
+  // Support email channel — per-tenant sender identity for outbound replies and
+  // the domain used in the per-ticket Reply-To address that loops back through
+  // the inbound webhook (e.g. ticket+<token>@support.<tenant>.com).
+  supportFromEmail: text("support_from_email"),
+  supportFromName: text("support_from_name"),
+  supportReplyDomain: text("support_reply_domain"),
   adminConsentGranted: boolean("admin_consent_granted").default(false),
   adminConsentGrantedAt: timestamp("admin_consent_granted_at"),
   adminConsentGrantedBy: varchar("admin_consent_granted_by"),
@@ -3282,11 +3288,23 @@ export type SupportTicket = typeof supportTickets.$inferSelect;
 export const supportTicketReplies = pgTable("support_ticket_replies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null' }),
   message: text("message").notNull(),
   isInternal: boolean("is_internal").default(false),
+  // RFC 5322 message identifiers for reliable email threading.
+  // messageId is the Message-ID header of the email we sent or received for this reply.
+  // inReplyTo is the In-Reply-To header value of the inbound message (so we can chain).
+  messageId: text("message_id"),
+  inReplyTo: text("in_reply_to"),
+  // Tracks how the reply entered the system: "web" (agent console), "portal", "email", "api".
+  source: text("source"),
+  // Free-form sender label for inbound emails when userId is null (e.g. external requester address).
+  externalAuthor: text("external_author"),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
-});
+}, (table) => ({
+  messageIdIdx: index("idx_support_ticket_replies_message_id").on(table.messageId),
+  ticketIdx: index("idx_support_ticket_replies_ticket").on(table.ticketId),
+}));
 
 export const insertSupportTicketReplySchema = createInsertSchema(supportTicketReplies).omit({
   id: true,
@@ -3295,6 +3313,48 @@ export const insertSupportTicketReplySchema = createInsertSchema(supportTicketRe
 
 export type InsertSupportTicketReply = z.infer<typeof insertSupportTicketReplySchema>;
 export type SupportTicketReply = typeof supportTicketReplies.$inferSelect;
+
+// Inbound email attachments captured for a ticket. Stored either inline in object
+// storage (storageKey set) or — for the dev/local environment — on disk.
+export const supportTicketAttachments = pgTable("support_ticket_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  replyId: varchar("reply_id").references(() => supportTicketReplies.id, { onDelete: 'cascade' }),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type"),
+  sizeBytes: integer("size_bytes").notNull().default(0),
+  storageKey: text("storage_key").notNull(),
+  storageBackend: text("storage_backend").notNull().default("local"), // 'local' | 'object_storage'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  ticketIdx: index("idx_support_attachments_ticket").on(table.ticketId),
+  replyIdx: index("idx_support_attachments_reply").on(table.replyId),
+}));
+
+export const insertSupportTicketAttachmentSchema = createInsertSchema(supportTicketAttachments).omit({ id: true, createdAt: true });
+export type InsertSupportTicketAttachment = z.infer<typeof insertSupportTicketAttachmentSchema>;
+export type SupportTicketAttachment = typeof supportTicketAttachments.$inferSelect;
+
+// Microsoft Graph mailbox change-notification subscriptions used to drive the
+// inbound support email pipeline. Persisted so the renewer + notification
+// handler survive process restarts.
+export const supportEmailSubscriptions = pgTable("support_email_subscriptions", {
+  id: varchar("id").primaryKey(), // Graph subscription id
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  azureTenantId: text("azure_tenant_id").notNull(),
+  mailbox: text("mailbox").notNull(),
+  clientState: text("client_state").notNull(),
+  notificationUrl: text("notification_url").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_email_subs_tenant").on(table.tenantId),
+}));
+
+export const insertSupportEmailSubscriptionSchema = createInsertSchema(supportEmailSubscriptions).omit({ createdAt: true, updatedAt: true });
+export type InsertSupportEmailSubscription = z.infer<typeof insertSupportEmailSubscriptionSchema>;
+export type SupportEmailSubscription = typeof supportEmailSubscriptions.$inferSelect;
 
 // Support Ticket to Planner Task sync tracking
 export const supportTicketPlannerSync = pgTable("support_ticket_planner_sync", {

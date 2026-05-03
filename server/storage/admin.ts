@@ -34,6 +34,12 @@ import {
   supportTicketReplies,
   type SupportTicketReply,
   type InsertSupportTicketReply,
+  supportTicketAttachments,
+  type SupportTicketAttachment,
+  type InsertSupportTicketAttachment,
+  supportEmailSubscriptions,
+  type SupportEmailSubscription,
+  type InsertSupportEmailSubscription,
   supportTicketPlannerSync,
   type SupportTicketPlannerSync,
   type InsertSupportTicketPlannerSync,
@@ -950,6 +956,84 @@ export const adminMethods: ThisType<IStorage & {
       .set(updates)
       .where(eq(supportTickets.id, reply.ticketId));
     return created;
+  },
+
+  async updateSupportTicketReply(id: string, updates: Partial<InsertSupportTicketReply>): Promise<SupportTicketReply> {
+    const [updated] = await db.update(supportTicketReplies)
+      .set(updates)
+      .where(eq(supportTicketReplies.id, id))
+      .returning();
+    return updated;
+  },
+
+  async getSupportTicketReplyByMessageId(messageId: string): Promise<SupportTicketReply | undefined> {
+    const [r] = await db.select().from(supportTicketReplies)
+      .where(eq(supportTicketReplies.messageId, messageId)).limit(1);
+    return r;
+  },
+
+  async getSupportTicketRepliesWithMessageIds(ticketId: string): Promise<SupportTicketReply[]> {
+    return db.select().from(supportTicketReplies)
+      .where(and(eq(supportTicketReplies.ticketId, ticketId), isNotNull(supportTicketReplies.messageId)))
+      .orderBy(supportTicketReplies.createdAt);
+  },
+
+  // ===== Support ticket attachments =====
+  async createSupportTicketAttachment(att: InsertSupportTicketAttachment): Promise<SupportTicketAttachment> {
+    const [created] = await db.insert(supportTicketAttachments).values(att).returning();
+    return created;
+  },
+
+  async getSupportTicketAttachments(ticketId: string): Promise<SupportTicketAttachment[]> {
+    return db.select().from(supportTicketAttachments)
+      .where(eq(supportTicketAttachments.ticketId, ticketId))
+      .orderBy(supportTicketAttachments.createdAt);
+  },
+
+  async getSupportTicketAttachmentById(id: string): Promise<SupportTicketAttachment | undefined> {
+    const [a] = await db.select().from(supportTicketAttachments)
+      .where(eq(supportTicketAttachments.id, id)).limit(1);
+    return a;
+  },
+
+  // ===== Support email (Graph) subscriptions =====
+  async upsertSupportEmailSubscription(sub: InsertSupportEmailSubscription): Promise<SupportEmailSubscription> {
+    const [row] = await db.insert(supportEmailSubscriptions)
+      .values(sub)
+      .onConflictDoUpdate({
+        target: supportEmailSubscriptions.id,
+        set: {
+          tenantId: sub.tenantId,
+          azureTenantId: sub.azureTenantId,
+          mailbox: sub.mailbox,
+          clientState: sub.clientState,
+          notificationUrl: sub.notificationUrl,
+          expiresAt: sub.expiresAt,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  },
+  async updateSupportEmailSubscriptionExpiry(id: string, expiresAt: Date): Promise<void> {
+    await db.update(supportEmailSubscriptions)
+      .set({ expiresAt, updatedAt: new Date() })
+      .where(eq(supportEmailSubscriptions.id, id));
+  },
+  async deleteSupportEmailSubscription(id: string): Promise<void> {
+    await db.delete(supportEmailSubscriptions).where(eq(supportEmailSubscriptions.id, id));
+  },
+  async getSupportEmailSubscription(id: string): Promise<SupportEmailSubscription | undefined> {
+    const [row] = await db.select().from(supportEmailSubscriptions)
+      .where(eq(supportEmailSubscriptions.id, id)).limit(1);
+    return row;
+  },
+  async listSupportEmailSubscriptions(tenantId?: string): Promise<SupportEmailSubscription[]> {
+    if (tenantId) {
+      return db.select().from(supportEmailSubscriptions)
+        .where(eq(supportEmailSubscriptions.tenantId, tenantId));
+    }
+    return db.select().from(supportEmailSubscriptions);
   },
 
   async createSupportTicketPlannerSync(sync: InsertSupportTicketPlannerSync): Promise<SupportTicketPlannerSync> {

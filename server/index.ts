@@ -233,6 +233,12 @@ async function setupAdditionalServices(app: Express, server: Server, envValid: b
     }).then(() => {
       log('✅ Database connection successful');
       
+      // Rehydrate persisted Microsoft Graph mail subscriptions so the renewer
+      // and notification handler keep working across restarts.
+      import('./services/support-graph-subscription.js').then(({ rehydrate }) => {
+        rehydrate().catch((err: any) => log(`⚠️ Support mailbox subscription rehydrate failed: ${err.message}`));
+      }).catch((err: any) => log(`⚠️ Failed to import support-graph-subscription: ${err.message}`));
+
       // Start the time reminder scheduler after database is confirmed working
       log('🔄 Starting time reminder scheduler...');
       import('./services/time-reminder-scheduler.js').then(({ startTimeReminderScheduler }) => {

@@ -2,7 +2,9 @@ import type { Express } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 import { storage } from "../storage";
+import { supportEmailStorage } from "../storage/support-email-types";
 import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES } from "@shared/schema";
+import type { InsertSupportTicketReply, SupportTicketReply, SupportTicketWatcher } from "@shared/schema";
 
 const s = storage as any;
 
@@ -277,12 +279,59 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
 
       const { message, isInternal } = parsed.data;
 
-      const reply = await storage.createSupportTicketReply({
+      const willBeInternal = isAdmin && isInternal ? true : false;
+      const replyInput: InsertSupportTicketReply = {
         ticketId: ticket.id,
         userId: user.id,
         message,
-        isInternal: isAdmin && isInternal ? true : false,
-      });
+        isInternal: willBeInternal,
+        source: "web",
+      };
+      const reply: SupportTicketReply = await storage.createSupportTicketReply(replyInput);
+
+      // Outbound email pipeline: when an agent posts a non-internal reply, email
+      // the requester (and watchers) with proper RFC 5322 threading headers and
+      // a per-ticket Reply-To that loops back to the inbound webhook.
+      if (!willBeInternal && isAdmin) {
+        try {
+          const requesterEmail = ticket.externalRequesterEmail
+            || (ticket.userId ? (await storage.getUser(ticket.userId))?.email : null);
+          if (requesterEmail) {
+            const priorReplies: SupportTicketReply[] = await supportEmailStorage.getSupportTicketRepliesWithMessageIds(ticket.id);
+            const priorMessageIds = priorReplies.map(r => r.messageId).filter((m): m is string => !!m);
+            const watchers: SupportTicketWatcher[] = await supportEmailStorage.getSupportTicketWatchers(ticket.id);
+            const ccEmails = watchers
+              .map(w => w.externalEmail)
+              .filter((e): e is string => typeof e === "string" && !!e && e.toLowerCase() !== requesterEmail.toLowerCase());
+            const tenant = ticket.tenantId ? await storage.getTenant(ticket.tenantId) : null;
+            const staffName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || "Support";
+            const { sendStaffReplyEmail } = await import("../email-support");
+            // Mark first response immediately so SLA reflects the outbound.
+            if (!ticket.firstResponseAt) {
+              try { await storage.updateSupportTicket(ticket.id, { firstResponseAt: new Date() }); } catch {}
+            }
+            const sentMessageId = await sendStaffReplyEmail({
+              ticket,
+              reply,
+              staffName,
+              requesterEmail,
+              ccEmails,
+              priorMessageIds,
+              tenantName: tenant?.name || null,
+              fromEmail: tenant?.supportFromEmail || null,
+              fromName: tenant?.supportFromName || null,
+              replyDomain: tenant?.supportReplyDomain || null,
+            });
+            if (sentMessageId) {
+              await supportEmailStorage.updateSupportTicketReply(reply.id, { messageId: sentMessageId });
+              reply.messageId = sentMessageId;
+            }
+            await supportEmailStorage.logSupportTicketActivity({ ticketId: ticket.id, actorUserId: user.id, action: "comment_added", note: "emailed requester" });
+          }
+        } catch (mailErr) {
+          console.error("[SUPPORT] Failed to email staff reply:", mailErr);
+        }
+      }
 
       return res.status(201).json(reply);
     } catch (error) {

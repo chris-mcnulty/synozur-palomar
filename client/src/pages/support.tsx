@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Plus, ArrowLeft, Send, LifeBuoy, Clock, Pencil, X, Check, XCircle, AlertCircle, CheckCircle2, Shield } from "lucide-react";
+import { Loader2, Plus, ArrowLeft, Send, LifeBuoy, Clock, Pencil, X, Check, XCircle, AlertCircle, CheckCircle2, Shield, Paperclip, Download } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import {
   AlertDialog,
@@ -63,7 +63,28 @@ interface Reply {
   message: string;
   isInternal: boolean;
   createdAt: string;
+  source?: string | null;
+  externalAuthor?: string | null;
   user?: { id: string; firstName: string; lastName: string; email: string } | null;
+}
+
+interface TicketAttachment {
+  id: string;
+  ticketId: string;
+  replyId: string | null;
+  fileName: string;
+  contentType: string | null;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let n = bytes;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 function getStatusBadgeClass(status: string) {
@@ -362,6 +383,10 @@ function TicketDetail({ ticketId, onBack }: { ticketId: string; onBack: () => vo
 
   const { data: ticket, isLoading } = useQuery<Ticket>({
     queryKey: ["/api/support/tickets", ticketId],
+  });
+
+  const { data: attachments } = useQuery<TicketAttachment[]>({
+    queryKey: ["/api/support/tickets", ticketId, "attachments"],
   });
 
   const isOwner = ticket && user && ticket.author?.id === user.id;
@@ -666,14 +691,46 @@ function TicketDetail({ ticketId, onBack }: { ticketId: string; onBack: () => vo
       <div className="space-y-4">
         <h2 className="text-lg font-medium">Replies</h2>
 
+        {(() => {
+          const ticketAttachments = (attachments || []).filter(a => !a.replyId);
+          if (!ticketAttachments.length) return null;
+          return (
+            <Card data-testid="card-ticket-attachments">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Paperclip className="h-4 w-4" />
+                  Attachments
+                </div>
+                <div className="space-y-1">
+                  {ticketAttachments.map(a => (
+                    <a
+                      key={a.id}
+                      href={`/api/support/attachments/${a.id}/download`}
+                      className="flex items-center justify-between text-sm rounded border px-3 py-2 hover:bg-muted"
+                      data-testid={`link-attachment-${a.id}`}
+                    >
+                      <span className="truncate">{a.fileName}</span>
+                      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {formatBytes(a.sizeBytes)}
+                        <Download className="h-3.5 w-3.5" />
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
+
         {(!ticket.replies || ticket.replies.length === 0) ? (
           <p className="text-sm text-muted-foreground" data-testid="text-no-replies">No replies yet.</p>
         ) : (
           <div className="space-y-3">
             {ticket.replies.map((reply: Reply) => {
+              const replyAttachments = (attachments || []).filter(a => a.replyId === reply.id);
               const authorName = reply.user
                 ? `${reply.user.firstName || ''} ${reply.user.lastName || ''}`.trim() || reply.user.email
-                : "Unknown";
+                : reply.externalAuthor || "Unknown";
               return (
               <Card key={reply.id} data-testid={`card-reply-${reply.id}`}>
                 <CardContent className="p-4">
@@ -700,6 +757,27 @@ function TicketDetail({ ticketId, onBack }: { ticketId: string; onBack: () => vo
                       <p className="text-sm mt-1 whitespace-pre-wrap" data-testid={`text-reply-message-${reply.id}`}>
                         {reply.message}
                       </p>
+                      {replyAttachments.length > 0 && (
+                        <div className="mt-3 space-y-1">
+                          {replyAttachments.map(a => (
+                            <a
+                              key={a.id}
+                              href={`/api/support/attachments/${a.id}/download`}
+                              className="flex items-center justify-between text-xs rounded border px-2 py-1.5 hover:bg-muted"
+                              data-testid={`link-reply-attachment-${a.id}`}
+                            >
+                              <span className="flex items-center gap-1.5 truncate">
+                                <Paperclip className="h-3 w-3 shrink-0" />
+                                {a.fileName}
+                              </span>
+                              <span className="flex items-center gap-2 text-muted-foreground">
+                                {formatBytes(a.sizeBytes)}
+                                <Download className="h-3 w-3" />
+                              </span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>

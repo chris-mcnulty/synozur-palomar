@@ -22,6 +22,13 @@
       "when": 1777786561553,
       "tag": "0003_sla_breach_watcher",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777786936193,
+      "tag": "0002_whole_phantom_reporter",
+      "breakpoints": true
     }
   ]
 }
