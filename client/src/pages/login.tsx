@@ -29,7 +29,7 @@ import {
 import { SynozurLogo } from "@/components/icons/synozur-logo";
 import { SynozurAppSwitcher } from "@/components/synozur-app-switcher";
 import { Aurora } from "@/components/aurora";
-import heroImage from "@assets/AdobeStock_244105520_1771187192557.jpeg";
+import heroImage from "@assets/Firefly_5c02a715-05d7-48e2-91d7-99c03988b690_1777808195121.jpeg";
 import secondaryImage from "@assets/AdobeStock_189127184_1771187213585.jpeg";
 import constellationLogoWhite from "@assets/Constellation_Logo_-_White_1773876279047.png";
 
