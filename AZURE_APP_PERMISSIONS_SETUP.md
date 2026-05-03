@@ -33,7 +33,7 @@ All SPE container operations go through **Microsoft Graph** — no separate Shar
 
 ### For Your Own Tenant
 
-1. Go to **Azure Portal** → **App Registrations** → **Synozur Constellation SCDP**
+1. Go to **Azure Portal** → **App Registrations** → **Synozur Palomar SCDP**
 2. Click **API Permissions**
 3. Verify all permissions above are listed
 4. Click **"Grant admin consent for [your tenant]"**

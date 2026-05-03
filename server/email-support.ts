@@ -4,11 +4,11 @@ import crypto from "crypto";
 
 const APP_URL = process.env.APP_PUBLIC_URL || 'https://constellation.synozur.com';
 
-const SUPPORT_NOTIFICATION_EMAIL = "Constellation@synozur.com";
+const SUPPORT_NOTIFICATION_EMAIL = "Palomar@synozur.com";
 
 // Domain used for the per-ticket Reply-To address. The MX for this domain
 // must route to whatever delivers messages into /api/support/email-inbound
-// (e.g. Microsoft Graph subscription on Constellation@synozur.com).
+// (e.g. Microsoft Graph subscription on Palomar@synozur.com).
 export const SUPPORT_REPLY_DOMAIN = process.env.SUPPORT_REPLY_DOMAIN || "support.synozur.com";
 
 function buildPortalUrl(ticket: SupportTicket): string {
@@ -116,6 +116,86 @@ export function isBounceOrAutoReply(input: {
 }
 
 /**
+ * Strip quoted reply history and common signature delimiters from an inbound
+ * email body so the ticket timeline shows just the new content the requester
+ * typed. Conservative: when no clear quoted region is found, returns the
+ * original text unchanged. The caller is expected to keep the unmodified body
+ * elsewhere (e.g. on the reply's `rawMessage` column) for audit.
+ *
+ * Handles common patterns from Outlook, Gmail, and Apple Mail:
+ *   - Lines beginning with ">" (RFC 3676 quoting)
+ *   - "On <date…>, <name> wrote:" intro lines (Gmail / Apple Mail)
+ *   - "From: …\nSent: …\nTo: …\nSubject: …" header blocks (Outlook)
+ *   - "-----Original Message-----" delimiters (Outlook / older clients)
+ *   - "_____" horizontal rule blocks (Outlook web)
+ *   - Signature delimiter "-- " (RFC 3676)
+ */
+export function stripQuotedReply(body: string | null | undefined): string {
+  if (!body) return "";
+  const normalized = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+
+  // Patterns that mark the start of a quoted/forwarded region.
+  // We trim each line before testing so leading whitespace/non-breaking spaces
+  // (common in HTML→text conversions) don't defeat the match.
+  const quoteIntroPatterns: RegExp[] = [
+    // Gmail / Apple Mail: "On Tue, Jan 2, 2024 at 3:45 PM, Foo <foo@bar> wrote:"
+    // Also handles localized variants where "wrote:" might be missing if it
+    // wraps to the next line, by allowing an open-ended "On … <email…>" form.
+    /^On .{1,200}\bwrote:\s*$/i,
+    /^On .{1,200}<[^>]+@[^>]+>\s*:?\s*$/i,
+    // Outlook: "-----Original Message-----" / "-----Forwarded Message-----"
+    /^-{2,}\s*(Original|Forwarded) Message\s*-{2,}\s*$/i,
+    // Outlook web horizontal rule before quoted block.
+    /^_{5,}\s*$/,
+    // Outlook header block start.
+    /^From:\s*.+/i,
+    // Apple Mail "Begin forwarded message:"
+    /^Begin forwarded message:\s*$/i,
+  ];
+
+  let cutIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (quoteIntroPatterns.some(p => p.test(trimmed))) {
+      cutIndex = i;
+      break;
+    }
+    // A run of ">"-quoted lines also marks the quoted region. Require the
+    // first quoted line to follow at least one non-quoted line so we don't
+    // truncate a body that legitimately starts with ">".
+    if (/^>/.test(trimmed) && i > 0) {
+      cutIndex = i;
+      break;
+    }
+  }
+
+  let trimmedLines = cutIndex >= 0 ? lines.slice(0, cutIndex) : lines.slice();
+
+  // Drop a trailing signature block delimited by "-- " (RFC 3676). Only
+  // applied when we still have content above it.
+  for (let i = 0; i < trimmedLines.length; i++) {
+    if (trimmedLines[i].trim() === "--" || trimmedLines[i] === "-- ") {
+      if (i > 0) trimmedLines = trimmedLines.slice(0, i);
+      break;
+    }
+  }
+
+  // Collapse trailing blank lines.
+  while (trimmedLines.length && trimmedLines[trimmedLines.length - 1].trim() === "") {
+    trimmedLines.pop();
+  }
+
+  const result = trimmedLines.join("\n").trim();
+  // Safety net: if stripping produced an empty body but the original had
+  // content, fall back to the original so the timeline doesn't show "(empty
+  // body)" for what was really a short reply.
+  if (!result && normalized.trim()) return normalized.trim();
+  return result;
+}
+
+/**
  * Resolve tenant-branding bits used by outbound mail templates. Best-effort —
  * if the tenant lookup fails, we fall back to platform defaults.
  */
@@ -207,7 +287,7 @@ export async function sendSupportTicketReplyNotification(
   const msg = {
     to: recipient.email,
     from: fromEmail,
-    subject: `[Constellation Support] New reply on ticket #${ticket.ticketNumber}: ${ticket.subject}`,
+    subject: `[Palomar Support] New reply on ticket #${ticket.ticketNumber}: ${ticket.subject}`,
     html: `
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background:#1d4ed8;color:#fff;padding:20px;">
@@ -239,7 +319,7 @@ export async function sendSupportTicketNotification(
   const msg = {
     to: SUPPORT_NOTIFICATION_EMAIL,
     from: fromEmail,
-    subject: `[Constellation Support] New ${ticket.priority} ${ticket.category.replace('_', ' ')} - Ticket #${ticket.ticketNumber}`,
+    subject: `[Palomar Support] New ${ticket.priority} ${ticket.category.replace('_', ' ')} - Ticket #${ticket.ticketNumber}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -258,14 +338,14 @@ export async function sendSupportTicketNotification(
                   <tr>
                     <td style="padding: 30px 40px;">
                       <table style="width: 100%; border-collapse: collapse; margin: 0 0 20px;">
-                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">Application</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">Constellation</td></tr>
+                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">Application</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">Palomar</td></tr>
                         <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">User</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">${userName} (${user.email})</td></tr>
                         <tr><td style="padding: 8px 12px; font-size: 13px; color: #888;">Subject</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0;">${ticket.subject}</td></tr>
                       </table>
                       <div style="padding: 16px; background: #111; border-radius: 8px; margin: 0 0 20px;">
                         <p style="margin: 0; font-size: 13px; color: #ccc; white-space: pre-wrap;">${ticket.description}</p>
                       </div>
-                      <a href="${APP_URL}/support" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View in Constellation</a>
+                      <a href="${APP_URL}/support" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View in Palomar</a>
                     </td>
                   </tr>
                 </table>

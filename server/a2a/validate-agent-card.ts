@@ -6,7 +6,7 @@
  *   2. server/routes/mcp.ts — GET /mcp/agent-card-health runtime endpoint
  *
  * Validates a card object against A2A 1.0 requirements and the
- * Constellation-specific audience/scope constraints.
+ * Palomar-specific audience/scope constraints.
  */
 
 export const EXPECTED_APP_ID = "198aa0a6-d2ed-4f35-b41b-b6f6778a30d6";

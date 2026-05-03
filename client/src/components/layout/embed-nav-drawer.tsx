@@ -110,7 +110,7 @@ export function EmbedNavDrawer() {
         <SheetContent side="left" className="w-64 p-0 flex flex-col">
           <SheetHeader className="px-4 py-3 border-b border-border shrink-0">
             <SheetTitle className="text-sm font-semibold tracking-tight">
-              Constellation
+              Palomar
             </SheetTitle>
           </SheetHeader>
 

@@ -1,4 +1,4 @@
-# Constellation - Synozur Consulting Delivery Platform (SCDP)
+# Palomar - Synozur Consulting Delivery Platform (SCDP)
 
 ## What This App Is
 A comprehensive consulting project lifecycle platform: estimation, resource allocation, time tracking, expense management, and automated invoice generation. Multi-tenant SaaS for consulting firms.

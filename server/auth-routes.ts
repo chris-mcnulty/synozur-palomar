@@ -431,7 +431,7 @@ export function registerAuthRoutes(app: Express): void {
 
   // Teams Custom Tab SSO endpoint
   // Accepts a client-side token from Teams SDK authentication.getAuthToken()
-  // and exchanges it for a Constellation session
+  // and exchanges it for a Palomar session
   app.post("/api/auth/teams-sso", async (req, res) => {
     try {
       const { token } = req.body;
@@ -508,7 +508,7 @@ export function registerAuthRoutes(app: Express): void {
 
       if (!dbUser) {
         console.error("[TEAMS-SSO] User not found:", email);
-        return res.status(403).json({ message: "User not found. Please ensure your account exists in Constellation." });
+        return res.status(403).json({ message: "User not found. Please ensure your account exists in Palomar." });
       }
 
       if (!dbUser.canLogin) {

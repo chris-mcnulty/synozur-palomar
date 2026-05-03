@@ -1,5 +1,5 @@
 /**
- * Shared source of truth for the Constellation A2A Agent Card.
+ * Shared source of truth for the Palomar A2A Agent Card.
  *
  * Used by:
  *   1. server/routes.ts — dynamic GET /.well-known/agent.json Express route
@@ -15,9 +15,9 @@ const ENTRA_BASE = "https://login.microsoftonline.com/common/oauth2/v2.0";
 
 export const AGENT_CARD_STATIC = {
   protocolVersion: "1.0",
-  name: "Constellation Copilot",
+  name: "Palomar Copilot",
   description:
-    "AI agent for Synozur's Constellation consulting delivery platform. Provides read and write access to projects, portfolio, estimates, time tracking, expenses, RAIDD logs, status reports, financials, clients, and M365/Teams context.",
+    "AI agent for Synozur's Palomar consulting delivery platform. Provides read and write access to projects, portfolio, estimates, time tracking, expenses, RAIDD logs, status reports, financials, clients, and M365/Teams context.",
   provider: {
     organization: "Synozur",
     url: "https://www.synozur.com",
@@ -35,7 +35,7 @@ export const AGENT_CARD_STATIC = {
       tokenUrl: `${ENTRA_BASE}/token`,
       scopes: {
         [`api://${CONSTELLATION_APP_ID}/access_as_user`]:
-          "Access Constellation MCP as the signed-in user",
+          "Access Palomar MCP as the signed-in user",
       },
       audience: `api://${CONSTELLATION_APP_ID}`,
       issuerPattern: `https://login.microsoftonline.com/{tenantId}/v2.0`,
@@ -136,7 +136,7 @@ export const AGENT_CARD_STATIC = {
       examples: [
         "Search for clients matching 'Contoso'",
         "Create a new client called 'Blue Horizon Ltd'",
-        "Which Constellation projects are linked to HubSpot deal 12345?",
+        "Which Palomar projects are linked to HubSpot deal 12345?",
         "Show me open CRM deals above $50k",
       ],
     },

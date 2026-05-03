@@ -1,8 +1,8 @@
-# Constellation Product Roadmap
+# Palomar Product Roadmap
 
 **Synozur Consulting Delivery Platform (SCDP)**
 
-Strategic product roadmap outlining planned features, enhancements, and future direction for Constellation.
+Strategic product roadmap outlining planned features, enhancements, and future direction for Palomar.
 
 ---
 
@@ -21,7 +21,7 @@ Strategic product roadmap outlining planned features, enhancements, and future d
 ## Vision & Strategy
 
 ### Our Mission
-Constellation empowers consulting organizations to deliver exceptional client value by providing a comprehensive platform that streamlines project delivery, resource management, and financial operations from initial estimation through final billing.
+Palomar empowers consulting organizations to deliver exceptional client value by providing a comprehensive platform that streamlines project delivery, resource management, and financial operations from initial estimation through final billing.
 
 ### Strategic Pillars
 
@@ -131,7 +131,7 @@ The following major features have been delivered and are live in production. See
 - Bidirectional sync of project assignments with Planner tasks
 - Automatic sync every 30 minutes for enabled projects
 - Task creation with bucket mapping based on project stages
-- User assignment mapping between Constellation and Azure AD
+- User assignment mapping between Palomar and Azure AD
 - Status synchronization and date synchronization
 - Scheduled job monitoring with admin UI
 
@@ -167,7 +167,7 @@ The following major features have been delivered and are live in production. See
 - Pipeline and deal stage visibility with amount tracking
 - Deal-to-estimate linking with bidirectional object mapping
 - Contact import from HubSpot deals and companies
-- Company association mapping between Constellation clients and HubSpot companies
+- Company association mapping between Palomar clients and HubSpot companies
 - Automatic deal notes posted on invoice finalization
 - CRM sync status tracking with error reporting
 - Company contact search and import capabilities
@@ -186,7 +186,7 @@ The following major features have been delivered and are live in production. See
 - Container management interface for administrators
 - Custom column support with SharePoint-safe naming conventions
 
-### ✅ MCP Server & Constellation Copilot Agent
+### ✅ MCP Server & Palomar Copilot Agent
 **Completed:** March 2026
 - MCP server with ~24 read-only endpoints under `/mcp` for AI assistant integration
 - Power Platform Custom Connector with OpenAPI spec import
@@ -197,7 +197,7 @@ The following major features have been delivered and are live in production. See
 
 ### ✅ Teams Custom Tab Integration
 **Completed:** March 2026
-- Constellation projects embed directly as Microsoft Teams tabs for in-context project access
+- Palomar projects embed directly as Microsoft Teams tabs for in-context project access
 - Chromeless layout (no sidebar/header) when running inside Teams
 - Tab deep-linking via `?tab=` parameter for all project tabs
 - Read-only enforcement — all mutating actions hidden in embed mode
@@ -315,7 +315,7 @@ The following major features have been delivered and are live in production. See
 #### Phase 2: Planner Sync Protection for Generic Roles
 - Generic role allocations (roleId set, no personId) get `[RoleName]` prefix in Planner task title
 - `ROLE: RoleName` added to task notes for context
-- Sync field whitelist documented: Constellation owns role/person/rates; Planner owns status/dates/percentComplete
+- Sync field whitelist documented: Palomar owns role/person/rates; Planner owns status/dates/percentComplete
 - Prevents future bidirectional sync from overwriting role context
 
 **Note:** Phases 3-6 (smart suggestions, workload rebalancing, capacity analytics, bulk import) were completed in April 2026.
@@ -424,7 +424,7 @@ The following major features have been delivered and are live in production. See
 
 **Status:** 📋 Planned — Replit Engineering Task  
 **Target Completion:** Q2 2026  
-**Value Proposition:** Migrating Constellation's deployment infrastructure from GCP to Azure co-locates the application with its core dependencies (Azure AD, SharePoint Embedded, AI Foundry, Microsoft Graph), reducing latency for API calls, simplifying network architecture, and aligning with Synozur's Microsoft-first strategy.
+**Value Proposition:** Migrating Palomar's deployment infrastructure from GCP to Azure co-locates the application with its core dependencies (Azure AD, SharePoint Embedded, AI Foundry, Microsoft Graph), reducing latency for API calls, simplifying network architecture, and aligning with Synozur's Microsoft-first strategy.
 
 #### Deliverables
 - Coordinate with Replit engineering team for deployment target migration
@@ -434,7 +434,7 @@ The following major features have been delivered and are live in production. See
 - Smoke test all integrations (HubSpot, SendGrid, Outlook, SharePoint) post-migration
 - Update deployment documentation and runbooks
 
-**Note:** This is a Replit engineering task — the Constellation team provides requirements and validates the result, but the infrastructure change is executed by the Replit platform team.
+**Note:** This is a Replit engineering task — the Palomar team provides requirements and validates the result, but the infrastructure change is executed by the Replit platform team.
 
 ---
 
@@ -443,7 +443,7 @@ The following major features have been delivered and are live in production. See
 **Status:** ✅ Complete  
 **Completed:** March 2026  
 **Reference:** Vega MCP server configuration (successful production pattern)  
-**Value Proposition:** Expose Constellation's project management, financial, and resource data through a read-only MCP server, enabling AI assistants (Copilot, Claude, etc.) to query and interact with Constellation data directly — matching the architecture already proven with Synozur's Vega product.
+**Value Proposition:** Expose Palomar's project management, financial, and resource data through a read-only MCP server, enabling AI assistants (Copilot, Claude, etc.) to query and interact with Palomar data directly — matching the architecture already proven with Synozur's Vega product.
 
 #### Delivered
 - MCP server with ~24 read-only GET endpoints under `/mcp`
@@ -451,7 +451,7 @@ The following major features have been delivered and are live in production. See
 - Query endpoints for user profile, assignments, time entries, expenses, projects, deliverables, RAIDD, estimates, invoices, CRM deals, portfolio views, and saved status reports
 - Bearer token authentication via JWKS (supports v1 and v2 Entra token issuers)
 - Power Platform Custom Connector with OpenAPI spec import
-- **Constellation Copilot Agent** in Copilot Studio — conversational access to all MCP data
+- **Palomar Copilot Agent** in Copilot Studio — conversational access to all MCP data
 - Teams channel deployment for chat and channel-based agent interactions
 - Multi-tenant authentication (Entra `common` authority)
 - Connector setup guide at `docs/MCP_CONNECTOR_SETUP.md`
@@ -530,7 +530,7 @@ The following major features have been delivered and are live in production. See
 #### Delivered (v1.8–v2.0)
 
 **Teams Custom Tab ✅ Complete (v1.8)**
-- Constellation projects embed as Microsoft Teams tabs with chromeless layout
+- Palomar projects embed as Microsoft Teams tabs with chromeless layout
 - Tab deep-linking, read-only enforcement, SSO authentication
 - Configurable tab setup and embed dashboard
 - Teams app manifest with three-app Entra architecture
@@ -551,7 +551,7 @@ The following major features have been delivered and are live in production. See
 - ~~Automated member add/remove on assignment changes~~ ✅
 - Guest user invitation workflows (Azure AD B2B) ✅
 - Automation audit logging ✅
-- ~~SharePoint project overview news post (auto-created on channel provisioning, includes project summary + quick links to Constellation project page and Teams channel)~~ ✅
+- ~~SharePoint project overview news post (auto-created on channel provisioning, includes project summary + quick links to Palomar project page and Teams channel)~~ ✅
 - ~~"Push to SharePoint" button on project Teams panel for manual re-provision of existing channels~~ ✅
 
 **Microsoft Teams Automation (Phase 3) — SharePoint Living Updates**
@@ -563,7 +563,7 @@ The following major features have been delivered and are live in production. See
 
 **Enhanced Planner Integration (Phase 2)**
 - Bidirectional sync with Microsoft Graph webhooks
-- Planner-to-Constellation change notifications
+- Planner-to-Palomar change notifications
 - Conflict resolution for simultaneous edits
 - Comprehensive audit trail for all sync activities
 - Multitenant app registration (so other tenants can consent without creating their own app)
@@ -947,7 +947,7 @@ We welcome feedback from users, administrators, and stakeholders on roadmap prio
 
 **March 8, 2026 — Cloud Migration & MCP Server**
 - Added Cloud Deployment Migration (GCP → Azure) to Near-Term Q2 2026 priorities — Replit engineering task to co-locate hosting with Azure-dependent services (SharePoint, AI Foundry, Graph API)
-- Added MCP Server (Model Context Protocol) to Near-Term Q2 2026 priorities — design and deploy a Constellation MCP server matching the successful Vega MCP server architecture for AI assistant integration
+- Added MCP Server (Model Context Protocol) to Near-Term Q2 2026 priorities — design and deploy a Palomar MCP server matching the successful Vega MCP server architecture for AI assistant integration
 
 **March 1, 2026 — Program Estimates, CRM Integration & Roadmap Advancement**
 - Added Program Estimates & Staffing Blocks to Recently Completed (new "Program" estimate type with week-based blocks, Gantt view, PM Wizard)
@@ -1032,7 +1032,7 @@ We welcome feedback from users, administrators, and stakeholders on roadmap prio
 
 **March 10, 2026**
 - Marked MCP Server & Copilot Agent as ✅ Complete (24 endpoints, Power Platform Custom Connector, Copilot Studio agent, Teams channel deployment)
-- Added MCP Server & Constellation Copilot Agent to Recently Completed section
+- Added MCP Server & Palomar Copilot Agent to Recently Completed section
 - Updated Enhanced Status Reporting with Persistent Report Storage (v1.7)
 - Updated version references to 1.7
 

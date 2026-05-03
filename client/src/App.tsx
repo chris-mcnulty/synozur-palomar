@@ -24,6 +24,7 @@ import SupportQueuesAdmin from "@/pages/support-queues";
 import SupportSlaPoliciesAdmin from "@/pages/support-sla-policies";
 import SupportKbAdmin from "@/pages/support-kb-admin";
 import SupportAnalyticsPage from "@/pages/support-analytics";
+import SupportEmailSubscriptionsAdmin from "@/pages/admin/support-email-subscriptions";
 import PortalTicket from "@/pages/portal-ticket";
 import PortalLookup from "@/pages/portal-lookup";
 import PortalKb from "@/pages/portal-kb";
@@ -67,7 +68,7 @@ function Router() {
 
   useEffect(() => {
     const isDevelopment = import.meta.env.MODE === "development";
-    const baseTitle = "Constellation | Synozur Support Platform";
+    const baseTitle = "Palomar | Synozur Support Platform";
     document.title = isDevelopment ? `Development - ${baseTitle}` : baseTitle;
   }, []);
 
@@ -186,6 +187,13 @@ function Router() {
         {user ? (
           <PermissionGuard allowedRoles={["admin"]}>
             <SupportKbAdmin />
+          </PermissionGuard>
+        ) : <Redirect to="/login" />}
+      </Route>
+      <Route path="/admin/support-email-subscriptions">
+        {user ? (
+          <PermissionGuard allowedRoles={["admin"]}>
+            <SupportEmailSubscriptionsAdmin />
           </PermissionGuard>
         ) : <Redirect to="/login" />}
       </Route>

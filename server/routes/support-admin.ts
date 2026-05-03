@@ -356,7 +356,7 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
       const ownerTenantId = tenantId!; // already set above
 
       const {
-        findReplyToToken, normalizeMessageId, isBounceOrAutoReply,
+        findReplyToToken, normalizeMessageId, isBounceOrAutoReply, stripQuotedReply,
       } = await import("../email-support");
 
       // 1) Bounce / autoresponder filter — log and skip silently with 200 so
@@ -441,10 +441,13 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
       // 3) Append-as-reply path
       if (ticket) {
+        const rawBody = data.text || "";
+        const trimmedBody = stripQuotedReply(rawBody);
         const replyInput: InsertSupportTicketReply = {
           ticketId: ticket.id,
           userId: null,
-          message: data.text || "(empty body)",
+          message: trimmedBody || "(empty body)",
+          rawMessage: rawBody && rawBody !== trimmedBody ? rawBody : null,
           isInternal: false,
           messageId: normalizeMessageId(data.messageId ?? null),
           inReplyTo: inReplyToNorm,
@@ -494,10 +497,13 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
       // Persist the inbound message itself as the seed reply so future replies
       // can chain via In-Reply-To.
+      const seedRaw = data.text || "";
+      const seedTrimmed = stripQuotedReply(seedRaw);
       const seedReplyInput: InsertSupportTicketReply = {
         ticketId: created.id,
         userId: null,
-        message: data.text || "(empty body)",
+        message: seedTrimmed || "(empty body)",
+        rawMessage: seedRaw && seedRaw !== seedTrimmed ? seedRaw : null,
         isInternal: true, // seed copy mirrors the description; keep internal
         messageId: normalizeMessageId(data.messageId ?? null),
         source: "email",
@@ -522,7 +528,7 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
   // ===== Inbound attachment download (agent console) =====
   // Authorization mirrors /api/support/tickets/:id: only the ticket owner
-  // (or a Constellation/global support admin) may list/download attachments.
+  // (or a Palomar/global support admin) may list/download attachments.
   const ensureTicketAccess = (req: Request, res: Response, t: { tenantId: string; userId: string | null }): boolean => {
     const u = (req as Request & { user?: { id?: string; role?: string; platformRole?: string } }).user;
     if (!u) { res.status(401).json({ error: "Authentication required" }); return false; }
@@ -583,6 +589,24 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
     const u = (req as Request & { user?: { role?: string; platformRole?: string } }).user;
     const isPlatformAdmin = u?.role === "global_admin" || u?.role === "constellation_admin" || u?.platformRole === "global_admin";
     return res.json(await listSubscriptions(isPlatformAdmin ? undefined : tenantId));
+  });
+
+  app.post("/api/support/graph/subscriptions/:id/renew", requireAuth, adminOnly, async (req, res) => {
+    try {
+      const { supportEmailStorage } = await import("../storage/support-email-types");
+      const sub = await supportEmailStorage.getSupportEmailSubscription(req.params.id);
+      if (!sub) return res.status(404).json({ error: "Not found" });
+      if (!ensureTenantOrAdmin(req, res, sub.tenantId)) return;
+      const body = z.object({ lifetimeMinutes: z.number().int().min(15).max(4230).optional() }).safeParse(req.body || {});
+      if (!body.success) return res.status(400).json({ error: "Validation failed", details: body.error.errors });
+      const { renewSubscription } = await import("../services/support-graph-subscription");
+      await renewSubscription(req.params.id, body.data.lifetimeMinutes ?? 60);
+      const updated = await supportEmailStorage.getSupportEmailSubscription(req.params.id);
+      return res.json(updated);
+    } catch (err: any) {
+      console.error("[GRAPH-SUB] renew failed:", err);
+      return res.status(500).json({ error: err?.message || "Failed to renew subscription" });
+    }
   });
 
   app.delete("/api/support/graph/subscriptions/:id", requireAuth, adminOnly, async (req, res) => {

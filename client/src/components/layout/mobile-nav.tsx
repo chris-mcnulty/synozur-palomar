@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/use-auth";
 import { Link, useLocation } from "wouter";
-import { Menu, Home, Settings, ActivitySquare, LifeBuoy, BookOpen } from "lucide-react";
+import { Menu, Home, Settings, ActivitySquare, LifeBuoy, BookOpen, Mail } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -55,7 +55,7 @@ export function MobileNav() {
       </SheetTrigger>
       <SheetContent side="left" className="w-72">
         <SheetHeader>
-          <SheetTitle>Constellation</SheetTitle>
+          <SheetTitle>Palomar</SheetTitle>
         </SheetHeader>
         <nav className="mt-4 space-y-1">
           <NavLink href="/dashboard" icon={<Home />} label="Dashboard" onNavigate={close} />
@@ -71,6 +71,13 @@ export function MobileNav() {
             href="/admin/agent-card-health"
             icon={<ActivitySquare />}
             label="Agent Card Health"
+            onNavigate={close}
+            requiredRoles={["admin"]}
+          />
+          <NavLink
+            href="/admin/support-email-subscriptions"
+            icon={<Mail />}
+            label="Support Mailbox"
             onNavigate={close}
             requiredRoles={["admin"]}
           />

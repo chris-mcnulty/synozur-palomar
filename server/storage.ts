@@ -643,7 +643,7 @@ export class DbStorage implements IStorage {
     const [created] = await db.insert(supportTickets).values({
       ...ticket,
       ticketNumber,
-      applicationSource: ticket.applicationSource ?? 'Constellation',
+      applicationSource: ticket.applicationSource ?? 'Palomar',
     }).returning();
     return created;
   }

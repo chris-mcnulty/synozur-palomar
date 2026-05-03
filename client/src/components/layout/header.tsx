@@ -32,7 +32,7 @@ export function Header() {
       <div className="flex items-center justify-between h-[73px] px-4">
         <div className="flex items-center gap-3">
           <MobileNav />
-          <div className="font-semibold text-lg">Constellation</div>
+          <div className="font-semibold text-lg">Palomar</div>
         </div>
         <div className="flex items-center gap-3">
           <ThemeToggle />

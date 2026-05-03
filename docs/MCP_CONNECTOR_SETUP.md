@@ -1,6 +1,6 @@
-# Constellation MCP — Power Platform Connector & Copilot Studio Agent Setup
+# Palomar MCP — Power Platform Connector & Copilot Studio Agent Setup
 
-This guide walks through creating a Custom Connector in Power Platform and wiring it into a Copilot Studio agent so Microsoft 365 Copilot can query Constellation MCP endpoints.
+This guide walks through creating a Custom Connector in Power Platform and wiring it into a Copilot Studio agent so Microsoft 365 Copilot can query Palomar MCP endpoints.
 
 The MCP surface has two tiers:
 - **Read endpoints** under `/mcp/*` — broadly available, no feature flag.
@@ -14,15 +14,15 @@ Three Entra ID app registrations are involved:
 
 | App | Purpose | Status |
 |-----|---------|--------|
-| **Constellation (SCDP-Content)** `198aa0a6-d2ed-4f35-b41b-b6f6778a30d6` | The API — owns the MCP endpoints, exposes the `access_as_user` scope | Exists |
-| **Constellation MCP Connector** | The OAuth client — used by the Power Platform Custom Connector to obtain tokens | Create in Part 1 |
-| **Constellation Copilot Agent** | The Copilot Studio agent — calls the connector actions on behalf of users | Create in Part 3 |
+| **Palomar (SCDP-Content)** `198aa0a6-d2ed-4f35-b41b-b6f6778a30d6` | The API — owns the MCP endpoints, exposes the `access_as_user` scope | Exists |
+| **Palomar MCP Connector** | The OAuth client — used by the Power Platform Custom Connector to obtain tokens | Create in Part 1 |
+| **Palomar Copilot Agent** | The Copilot Studio agent — calls the connector actions on behalf of users | Create in Part 3 |
 
-**Token flow:** User → Copilot Agent → Connector (obtains token via OAuth using Connector app's Client ID) → Constellation API (validates token against its own `access_as_user` scope)
+**Token flow:** User → Copilot Agent → Connector (obtains token via OAuth using Connector app's Client ID) → Palomar API (validates token against its own `access_as_user` scope)
 
 ## Prerequisites
 
-- Constellation deployed and accessible at `https://constellation.synozur.com`
+- Palomar deployed and accessible at `https://constellation.synozur.com`
 - Admin access to Azure Entra ID for the Synozur tenant (`b4fbeaf7-1c91-43bb-8031-49eb8d4175ee`)
 - A Power Platform environment with Copilot Studio access
 - Admin or Maker role in the Power Platform environment
@@ -31,40 +31,40 @@ Three Entra ID app registrations are involved:
 
 ## Part 1: Azure AD App Registrations
 
-### 1.1 Expose an API on the Constellation app registration (do this FIRST)
+### 1.1 Expose an API on the Palomar app registration (do this FIRST)
 
-The Constellation app must declare itself as an API before other apps can request permission to call it:
+The Palomar app must declare itself as an API before other apps can request permission to call it:
 
 1. Go to **Azure Portal → Entra ID → App registrations**
-2. Open the **Constellation app registration** (`198aa0a6-d2ed-4f35-b41b-b6f6778a30d6` / SCDP-Content)
+2. Open the **Palomar app registration** (`198aa0a6-d2ed-4f35-b41b-b6f6778a30d6` / SCDP-Content)
 3. Go to **Expose an API**
 4. Click **Set** next to Application ID URI → set it to: `api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`
 5. Click **Add a scope** with these values:
    - Scope name: `access_as_user`
    - Who can consent: **Admins and users**
-   - Admin consent display name: `Access Constellation MCP as signed-in user`
-   - Admin consent description: `Allows the Copilot connector to access Constellation MCP endpoints on behalf of the signed-in user`
-   - User consent display name: `Access Constellation on your behalf`
-   - User consent description: `Allows Copilot to read your Constellation project data`
+   - Admin consent display name: `Access Palomar MCP as signed-in user`
+   - Admin consent description: `Allows the Copilot connector to access Palomar MCP endpoints on behalf of the signed-in user`
+   - User consent display name: `Access Palomar on your behalf`
+   - User consent description: `Allows Copilot to read your Palomar project data`
    - State: **Enabled**
 6. Click **Add scope**
 
 ### 1.2 Register the Connector app
 
 1. Go to **Azure Portal → Entra ID → App registrations → New registration**
-2. Name: `Constellation MCP Connector`
-3. Supported account types: **Accounts in any organizational directory** (multi-tenant — matches Constellation's `common` authority so users from any Entra tenant that has Constellation accounts can authenticate)
+2. Name: `Palomar MCP Connector`
+3. Supported account types: **Accounts in any organizational directory** (multi-tenant — matches Palomar's `common` authority so users from any Entra tenant that has Palomar accounts can authenticate)
 4. Redirect URI: Leave blank for now (added in step 1.5)
 5. Click **Register**
-6. Note the **Client ID** — this is the Connector app's Client ID (different from Constellation's)
+6. Note the **Client ID** — this is the Connector app's Client ID (different from Palomar's)
 
-### 1.3 Grant the Connector app permission to call the Constellation API
+### 1.3 Grant the Connector app permission to call the Palomar API
 
 On the **Connector app** you just created:
 
 1. Go to **API permissions → Add a permission**
 2. Select the **APIs my organization uses** tab
-3. Search for `SCDP-Content` (or the Constellation app's display name) — if it doesn't appear, search by Client ID: `198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`
+3. Search for `SCDP-Content` (or the Palomar app's display name) — if it doesn't appear, search by Client ID: `198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`
 4. Select it → choose **Delegated permissions** → check **access_as_user**
 5. Click **Add permissions**
 6. Click **Grant admin consent for Synozur**
@@ -87,9 +87,9 @@ Still on the **Connector app**:
 3. Check **Access tokens** and **ID tokens** under Implicit grant
 4. Save
 
-### 1.6 Pre-authorize the Connector app on the Constellation registration
+### 1.6 Pre-authorize the Connector app on the Palomar registration
 
-Go back to the **Constellation app** (`198aa0a6-...`):
+Go back to the **Palomar app** (`198aa0a6-...`):
 
 1. Go to **Expose an API**
 2. Scroll down to **Authorized client applications**
@@ -108,7 +108,7 @@ This pre-authorizes the connector so users won't see a separate consent prompt w
 
 1. Go to **make.powerapps.com** → your environment
 2. Navigate to **Data → Custom Connectors → New custom connector → Import an OpenAPI file**
-3. Name: `Constellation MCP`
+3. Name: `Palomar MCP`
 4. Upload: [`docs/constellation-mcp-openapi.json`](constellation-mcp-openapi.json)
 5. Click **Import** — this pre-populates the General, Definition, and Security tabs
 
@@ -127,14 +127,14 @@ Select **OAuth 2.0** as the authentication type, then fill in:
 | Field | Value |
 |-------|-------|
 | Identity Provider | Azure Active Directory |
-| Client ID | The **Connector app's** Client ID (from step 1.2 — NOT the Constellation app's ID) |
+| Client ID | The **Connector app's** Client ID (from step 1.2 — NOT the Palomar app's ID) |
 | Secret options | **Use client secret** |
 | Client secret | The **Connector app's** client secret (from step 1.4) |
 | Authorization URL | `https://login.microsoftonline.com` (just the base URL — Power Platform appends `/{Tenant ID}/oauth2/authorize` automatically. Do NOT include the full path or it will be duplicated) |
-| Tenant ID | `common` (multi-tenant — matches Constellation's authority so users from any Entra directory can authenticate) |
-| Resource URL | `api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6` (the **Constellation app's** Application ID URI — tells Azure which API the token is for) |
+| Tenant ID | `common` (multi-tenant — matches Palomar's authority so users from any Entra directory can authenticate) |
+| Resource URL | `api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6` (the **Palomar app's** Application ID URI — tells Azure which API the token is for) |
 | Enable on-behalf-of login | `false` |
-| Scope | `api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6/access_as_user` (the **Constellation app's** exposed scope from step 1.1) |
+| Scope | `api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6/access_as_user` (the **Palomar app's** exposed scope from step 1.1) |
 | Redirect URL | Auto-generated after saving — copy this value and add it to the **Connector app's** Authentication redirect URIs in Entra (in addition to the `global.consent.azure-apim.net` URI from step 1.5) |
 
 ### 2.4 Definition tab — Import from OpenAPI file
@@ -142,7 +142,7 @@ Select **OAuth 2.0** as the authentication type, then fill in:
 Instead of creating each action manually, import the OpenAPI definition:
 
 1. When creating the connector, choose **New custom connector → Import an OpenAPI file** (instead of "Create from blank")
-2. Name: `Constellation MCP`
+2. Name: `Palomar MCP`
 3. Upload the file: [`docs/constellation-mcp-openapi.json`](constellation-mcp-openapi.json)
 4. Click **Import** — all operations will be created automatically with correct operation IDs, parameters, and response schemas
 
@@ -184,13 +184,13 @@ After import, review the **Definition** tab to confirm all operations are listed
 
 1. Go to **copilotstudio.microsoft.com**
 2. Click **Create** → **New agent**
-3. Name: `Constellation Assistant`
-4. Description: `Queries Constellation project delivery data — assignments, time entries, projects, RAIDD, financials, and CRM deals.`
+3. Name: `Palomar Assistant`
+4. Description: `Queries Palomar project delivery data — assignments, time entries, projects, RAIDD, financials, and CRM deals.`
 
 ### 3.2 Add the connector as a tool
 
 1. In the agent, go to **Tools** → **Add a tool**
-2. Search for or select **Custom connector** → find `Constellation MCP`
+2. Search for or select **Custom connector** → find `Palomar MCP`
 3. This imports all operations as available tools for the agent
 
 ### 3.3 Configure topics / instructions
@@ -198,7 +198,7 @@ After import, review the **Definition** tab to confirm all operations are listed
 Add the following to the agent's **Instructions** (system prompt):
 
 ```
-You are a Constellation assistant that helps users query their consulting delivery data. You have access to the Constellation MCP connector with the following capabilities:
+You are a Palomar assistant that helps users query their consulting delivery data. You have access to the Palomar MCP connector with the following capabilities:
 
 IDENTITY:
 - Always start by calling GetMyProfile to understand who the user is, their role, and their tenant.
@@ -235,7 +235,7 @@ FINANCIAL DATA (Billing Admin, Admin, Executive):
 
 CRM DATA (PM, Admin, Executive):
 - GetCrmDeals: Search HubSpot deals.
-- GetCrmDealLinkedProjects: Find Constellation projects linked to a deal.
+- GetCrmDealLinkedProjects: Find Palomar projects linked to a deal.
 
 GUIDELINES:
 - Always check the user's role before calling role-restricted endpoints.
@@ -282,13 +282,13 @@ For ALL write endpoints:
 
 1. In agent settings → **Security** → **Authentication**
 2. Select **Authenticate with Microsoft**
-3. Enable **Multi-tenant** — this is required because Constellation's Entra authority is set to `common`, allowing users from any organizational directory to authenticate
+3. Enable **Multi-tenant** — this is required because Palomar's Entra authority is set to `common`, allowing users from any organizational directory to authenticate
 4. This ensures the user's identity flows through to the connector with the correct tenant context
 
 ### 3.5 Test the agent
 
 In the Copilot Studio test pane, try these prompts:
-- "Who am I in Constellation?"
+- "Who am I in Palomar?"
 - "What are my assignments this week?"
 - "Show me all at-risk projects"
 - "What are the open risks across the portfolio?"
@@ -325,10 +325,10 @@ To allow the agent to post and respond in Teams chats and channels:
 | Issue | Fix |
 |-------|-----|
 | 401 on all requests | Check that the OAuth scope matches the Entra app's Expose an API scope |
-| 403 "Tenant context could not be resolved" | The user's Entra OID isn't mapped to a Constellation user/tenant. Ensure they've logged into Constellation at least once via SSO |
-| 403 "Insufficient permissions" | The user's Constellation role doesn't have access to that endpoint. Check the RBAC table in `docs/MCP_README.md` |
+| 403 "Tenant context could not be resolved" | The user's Entra OID isn't mapped to a Palomar user/tenant. Ensure they've logged into Palomar at least once via SSO |
+| 403 "Insufficient permissions" | The user's Palomar role doesn't have access to that endpoint. Check the RBAC table in `docs/MCP_README.md` |
 | Empty results | Check date filters and confirm the user has data in the active tenant |
-| HubSpot endpoints return empty | The tenant hasn't connected HubSpot in Constellation's Organization Settings |
+| HubSpot endpoints return empty | The tenant hasn't connected HubSpot in Palomar's Organization Settings |
 | 403 `mcp_writes_disabled` on `/mcp/v1/*` | Set `MCP_WRITES_ENABLED=true` in the server environment and redeploy. Default is off. |
 | 400 `mcp_write_missing_idempotency_key` | Every POST to `/mcp/v1/*` must include the `X-Idempotency-Key` header (UUID or opaque token). |
 | 409 `mcp_write_idempotency_conflict` | The same key was reused with a different request body. Generate a fresh UUID. |
@@ -338,7 +338,7 @@ To allow the agent to post and respond in Teams chats and channels:
 
 ## Part 4: Register as a Verified Connected Agent in Copilot Studio
 
-This part covers importing Constellation directly as a **connected agent** in Copilot Studio using the published `/.well-known/agent.json` agent card. This is the preferred path for native A2A integration — Copilot Studio calls Constellation as a peer agent rather than through a custom connector.
+This part covers importing Palomar directly as a **connected agent** in Copilot Studio using the published `/.well-known/agent.json` agent card. This is the preferred path for native A2A integration — Copilot Studio calls Palomar as a peer agent rather than through a custom connector.
 
 > **Prerequisite:** Complete Part 1 (Azure AD app registrations) before this part. Parts 2 and 3 (Custom Connector and manual agent creation) are an alternative path; this part supersedes them for teams on Copilot Studio GA with connected-agent support.
 
@@ -361,14 +361,14 @@ If the card is not reachable or returns incorrect content, resolve the deploymen
 
 ---
 
-### 4.2 Update the Constellation Azure AD app — knownClientApplications
+### 4.2 Update the Palomar Azure AD app — knownClientApplications
 
-When Copilot Studio is registered as a connected agent it receives its own Entra app registration (the "Constellation Copilot Agent" app created in step 3.x above, or one provided by your Copilot Studio administrator). That app's client ID must be listed as a **known client application** on the Constellation API registration so Entra will issue tokens for it without requiring explicit user consent on each call.
+When Copilot Studio is registered as a connected agent it receives its own Entra app registration (the "Palomar Copilot Agent" app created in step 3.x above, or one provided by your Copilot Studio administrator). That app's client ID must be listed as a **known client application** on the Palomar API registration so Entra will issue tokens for it without requiring explicit user consent on each call.
 
-On the **Constellation app registration** (`198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`):
+On the **Palomar app registration** (`198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`):
 
 1. Go to **Azure Portal → Entra ID → App registrations**
-2. Open **Constellation (SCDP-Content)** (`198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`)
+2. Open **Palomar (SCDP-Content)** (`198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`)
 3. Go to **Expose an API → Authorized client applications**
 4. Click **Add a client application**
 5. Enter the **Copilot Studio agent app's Client ID** (the app registered in your Copilot Studio environment — your Copilot Studio admin can provide this from the agent's **Settings → Security** page)
@@ -385,11 +385,11 @@ Alternatively, if your organization uses an **app manifest** to manage the regis
 
 Add the Copilot Studio agent's client ID to this array in the app manifest JSON and save.
 
-**Why this matters:** Without pre-authorization, every user will see an Entra consent prompt the first time they query Constellation through Copilot. Adding `knownClientApplications` suppresses that prompt because Entra trusts the Copilot agent app to act on the user's behalf.
+**Why this matters:** Without pre-authorization, every user will see an Entra consent prompt the first time they query Palomar through Copilot. Adding `knownClientApplications` suppresses that prompt because Entra trusts the Copilot agent app to act on the user's behalf.
 
 ---
 
-### 4.3 Import Constellation as a connected agent in Copilot Studio
+### 4.3 Import Palomar as a connected agent in Copilot Studio
 
 1. Go to **copilotstudio.microsoft.com** → your environment
 2. Open an existing agent or create a new one (**Create → New agent**)
@@ -418,7 +418,7 @@ Add the Copilot Studio agent's client ID to this array in the app manifest JSON 
 
 1. In agent settings → **Security** → **Authentication**
 2. Select **Authenticate with Microsoft**
-3. Ensure **Allow users from any organization** (multi-tenant) is enabled — Constellation's Entra authority is set to `common`
+3. Ensure **Allow users from any organization** (multi-tenant) is enabled — Palomar's Entra authority is set to `common`
 4. Confirm the **OAuth scope** field shows: `api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6/access_as_user`
 5. Save
 
@@ -430,7 +430,7 @@ Use the Copilot Studio test pane (or a Teams chat with the published agent) to v
 
 **Step 1 — Identity check**
 
-> Prompt: *"Who am I in Constellation?"*
+> Prompt: *"Who am I in Palomar?"*
 
 Expected: Copilot calls `GET /mcp/me`, acquires a token for the signed-in user, and returns their name, role (e.g. `pm`), and tenant. This confirms the OAuth flow completed successfully.
 
@@ -504,10 +504,10 @@ Once the end-to-end tests pass:
 | Issue | Fix |
 |-------|-----|
 | Agent card import fails | Confirm `https://constellation.synozur.com/.well-known/agent.json` returns HTTP 200 with valid JSON and `"protocolVersion": "1.0"` |
-| OAuth consent prompt appears for every user | Ensure the Copilot Studio agent's Client ID is listed in `knownClientApplications` on the Constellation app registration (step 5.2) |
-| 401 after import — "audience invalid" | Confirm the `audience` field in the agent card (`api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`) matches the Application ID URI set in **Expose an API** on the Constellation app registration |
+| OAuth consent prompt appears for every user | Ensure the Copilot Studio agent's Client ID is listed in `knownClientApplications` on the Palomar app registration (step 5.2) |
+| 401 after import — "audience invalid" | Confirm the `audience` field in the agent card (`api://198aa0a6-d2ed-4f35-b41b-b6f6778a30d6`) matches the Application ID URI set in **Expose an API** on the Palomar app registration |
 | Skills not appearing after import | Verify the `skills` array in `agent.json` is valid JSON — use `GET /.well-known/agent.json` and validate against the A2A 1.0 schema |
-| "Tenant context could not be resolved" (403) | The signed-in user's Entra OID isn't mapped to a Constellation user. Ask them to log into Constellation directly at least once via SSO to create the mapping |
+| "Tenant context could not be resolved" (403) | The signed-in user's Entra OID isn't mapped to a Palomar user. Ask them to log into Palomar directly at least once via SSO to create the mapping |
 | Teams channel shows agent but it doesn't respond | Confirm the agent is **Published** in Copilot Studio (draft agents do not respond in Teams) |
 | Multi-tenant users get 401 | Confirm **Allow users from any organization** is enabled in the agent's Security → Authentication settings |
 
