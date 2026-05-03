@@ -2,7 +2,9 @@ import type { Express } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 import { storage } from "../storage";
+import { supportEmailStorage } from "../storage/support-email-types";
 import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES } from "@shared/schema";
+import type { InsertSupportTicketReply, SupportTicketReply, SupportTicketWatcher, SupportQueue, SupportTicket } from "@shared/schema";
 
 const s = storage as any;
 
@@ -29,15 +31,62 @@ const createReplySchema = z.object({
 const updateTicketSchema = z.object({
   status: z.enum(TICKET_STATUSES).optional(),
   priority: z.enum(TICKET_PRIORITIES).optional(),
-  assignedTo: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
   category: z.enum(TICKET_CATEGORIES).optional(),
   subject: z.string().min(3).max(200).optional(),
   description: z.string().min(10).optional(),
+  queueId: z.string().nullable().optional(),
+  ticketType: z.enum(TICKET_TYPES).optional(),
 });
 
 const isConstellationAdmin = (role: string): boolean => {
   return ['admin', 'billing-admin'].includes(role) || role === 'constellation_admin' || role === 'global_admin';
 };
+
+const isPlatformAdminUser = (user: any): boolean => {
+  return user?.platformRole === 'global_admin'
+    || user?.platformRole === 'constellation_admin'
+    || user?.role === 'global_admin'
+    || user?.role === 'constellation_admin';
+};
+
+const isStaff = (user: any): boolean => {
+  return isPlatformAdminUser(user) || user?.role === 'admin' || user?.role === 'billing-admin';
+};
+
+const canStaffAccessTicket = (user: any, ticket: SupportTicket): boolean => {
+  if (isPlatformAdminUser(user)) return true;
+  return !!user?.tenantId && ticket.tenantId === user.tenantId;
+};
+
+function decorateTicketBreachInfo<T extends {
+  firstResponseDueAt?: Date | string | null;
+  firstResponseAt?: Date | string | null;
+  resolutionDueAt?: Date | string | null;
+  resolvedAt?: Date | string | null;
+  slaBreached?: boolean | null;
+  status?: string | null;
+}>(ticket: T): T & { breachInMinutes: number | null; breachType: 'first_response' | 'resolution' | null } {
+  const now = Date.now();
+  let best: { mins: number; type: 'first_response' | 'resolution' } | null = null;
+  const closed = ticket.status === 'resolved' || ticket.status === 'closed' || ticket.status === 'cancelled';
+  if (!closed) {
+    if (ticket.firstResponseDueAt && !ticket.firstResponseAt) {
+      const mins = Math.floor((new Date(ticket.firstResponseDueAt).getTime() - now) / 60_000);
+      if (mins >= 0 && mins <= 60) best = { mins, type: 'first_response' };
+    }
+    if (ticket.resolutionDueAt && !ticket.resolvedAt) {
+      const mins = Math.floor((new Date(ticket.resolutionDueAt).getTime() - now) / 60_000);
+      if (mins >= 0 && mins <= 60 && (best === null || mins < best.mins)) best = { mins, type: 'resolution' };
+    }
+  }
+  return {
+    ...ticket,
+    breachInMinutes: best?.mins ?? null,
+    breachType: best?.type ?? null,
+  };
+}
+
 
 export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
   const { requireAuth, requireRole } = deps;
@@ -85,6 +134,11 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
         }
       } catch (e) { /* non-fatal */ }
       try { await s.logSupportTicketActivity({ ticketId: ticket.id, actorUserId: user.id, action: 'created' }); } catch {}
+
+      try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(ticket.id, { actorUserId: user.id });
+      } catch {}
 
       try {
         const { sendSupportTicketNotification, sendTicketConfirmationToSubmitter } = await import("../email-support");
@@ -156,26 +210,89 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "Authentication required" });
 
-      if (isConstellationAdmin(user.role)) {
-        const { status, priority, category, tenantId, includeInProgress } = req.query as Record<string, string | undefined>;
-        const isPlatformRole = user.role === 'global_admin' || user.role === 'constellation_admin';
+      if (isStaff(user)) {
+        const { status, priority, category, tenantId, includeInProgress, view, assignedTo, queueId, ticketType, search, breachingWithinHours } = req.query as Record<string, string | undefined>;
+        const isPlatformRole = isPlatformAdminUser(user);
         const effectiveTenantId = isPlatformRole
           ? (tenantId || user.tenantId || undefined)
           : user.tenantId;
-        const statusFilter = includeInProgress === 'true' && status === 'open'
+
+        let statusFilter: string | string[] | undefined = includeInProgress === 'true' && status === 'open'
           ? ['open', 'in_progress']
           : (status || undefined);
+        let assignedToFilter: string | undefined = assignedTo && assignedTo !== 'unassigned' && assignedTo !== 'me' ? assignedTo : undefined;
+        if (assignedTo === 'me') assignedToFilter = user.id;
+        let unassigned = assignedTo === 'unassigned';
+        let breachingBefore: Date | undefined;
+        let breachingAfter: Date | undefined;
+        let closedSince: Date | undefined;
+        let queueIdsFilter: string[] | undefined;
+
+        switch (view) {
+          case 'my-open':
+            assignedToFilter = user.id;
+            statusFilter = ['new', 'open', 'in_progress'];
+            break;
+          case 'unassigned':
+            unassigned = true;
+            statusFilter = ['new', 'open', 'in_progress'];
+            break;
+          case 'breaching': {
+            const hours = parseInt(breachingWithinHours || '1', 10);
+            breachingAfter = new Date();
+            breachingBefore = new Date(Date.now() + hours * 60 * 60 * 1000);
+            statusFilter = ['new', 'open', 'in_progress', 'pending', 'on_hold'];
+            break;
+          }
+          case 'my-queues': {
+            statusFilter = ['new', 'open', 'in_progress', 'pending', 'on_hold'];
+            // Real queue-membership semantics: queues where the user is the
+            // queue lead (defaultAssigneeId).
+            const tenantForQueues = isPlatformRole
+              ? (effectiveTenantId || user.tenantId)
+              : user.tenantId;
+            if (tenantForQueues) {
+              const queues: SupportQueue[] = await s.getSupportQueues(tenantForQueues);
+              queueIdsFilter = queues
+                .filter((q) => q.defaultAssigneeId === user.id)
+                .map((q) => q.id);
+            } else {
+              queueIdsFilter = [];
+            }
+            break;
+          }
+          case 'awaiting':
+            statusFilter = ['pending', 'on_hold'];
+            break;
+          case 'closed-today': {
+            statusFilter = ['resolved', 'closed'];
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            closedSince = today;
+            break;
+          }
+        }
+
         const tickets = await storage.getAllSupportTickets({
           status: statusFilter,
           priority: priority || undefined,
           category: category || undefined,
           tenantId: effectiveTenantId,
+          assignedTo: assignedToFilter,
+          unassigned,
+          queueId: queueId || undefined,
+          queueIds: queueIdsFilter,
+          ticketType: ticketType || undefined,
+          search: search || undefined,
+          breachingBefore,
+          breachingAfter,
+          closedSince,
         });
-        return res.json(tickets);
+        return res.json(tickets.map(decorateTicketBreachInfo));
       }
 
       const tickets = await storage.getSupportTicketsByUserId(user.id);
-      return res.json(tickets);
+      return res.json(tickets.map(decorateTicketBreachInfo));
     } catch (error) {
       console.error("Error fetching support tickets:", error);
       return res.status(500).json({ error: "Failed to fetch support tickets" });
@@ -193,15 +310,17 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       }
 
       const isOwner = ticket.userId === user.id;
-      const isAdmin = isConstellationAdmin(user.role);
+      const staff = isStaff(user);
+      const isAdmin = staff && canStaffAccessTicket(user, ticket);
 
       if (!isOwner && !isAdmin) {
         return res.status(403).json({ error: "Access denied" });
       }
 
       const replies = await storage.getSupportTicketReplies(ticket.id, isAdmin);
-      const author = await storage.getUser(ticket.userId);
+      const author = ticket.userId ? await storage.getUser(ticket.userId) : null;
       const tenant = ticket.tenantId ? await storage.getTenant(ticket.tenantId) : null;
+      const assignee = ticket.assignedTo ? await storage.getUser(ticket.assignedTo) : null;
 
       const repliesWithUsers = await Promise.all(
         replies.map(async (reply) => {
@@ -213,11 +332,37 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
         })
       );
 
+      let watchers: any[] = [];
+      let activity: any[] = [];
+      if (isAdmin) {
+        try {
+          const rawWatchers = await s.getSupportTicketWatchers(ticket.id);
+          watchers = await Promise.all(rawWatchers.map(async (w: any) => {
+            const u = w.userId ? await storage.getUser(w.userId) : null;
+            return {
+              ...w,
+              user: u ? { id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName } : null,
+            };
+          }));
+          const rawActivity = await s.getSupportTicketActivity(ticket.id);
+          activity = await Promise.all(rawActivity.map(async (a: any) => {
+            const actor = a.actorUserId ? await storage.getUser(a.actorUserId) : null;
+            return {
+              ...a,
+              actor: actor ? { id: actor.id, firstName: actor.firstName, lastName: actor.lastName, email: actor.email } : null,
+            };
+          }));
+        } catch (e) { /* non-fatal */ }
+      }
+
       return res.json({
         ...ticket,
         replies: repliesWithUsers,
         author: author ? { id: author.id, email: author.email, firstName: author.firstName, lastName: author.lastName } : null,
         tenant: tenant ? { id: tenant.id, name: tenant.name } : null,
+        assignee: assignee ? { id: assignee.id, email: assignee.email, firstName: assignee.firstName, lastName: assignee.lastName } : null,
+        watchers,
+        activity,
       });
     } catch (error) {
       console.error("Error fetching support ticket:", error);
@@ -241,7 +386,8 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       }
 
       const isOwner = ticket.userId === user.id;
-      const isAdmin = isConstellationAdmin(user.role);
+      const staff = isStaff(user);
+      const isAdmin = staff && canStaffAccessTicket(user, ticket);
 
       if (!isOwner && !isAdmin) {
         return res.status(403).json({ error: "Access denied" });
@@ -249,12 +395,71 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
 
       const { message, isInternal } = parsed.data;
 
-      const reply = await storage.createSupportTicketReply({
+      const willBeInternal = isAdmin && isInternal ? true : false;
+      const replyInput: InsertSupportTicketReply = {
         ticketId: ticket.id,
         userId: user.id,
         message,
-        isInternal: isAdmin && isInternal ? true : false,
-      });
+        isInternal: willBeInternal,
+        source: "web",
+      };
+      const reply: SupportTicketReply = await storage.createSupportTicketReply(replyInput);
+
+      // Activity log: distinguish public reply vs internal note
+      try {
+        await s.logSupportTicketActivity({
+          ticketId: ticket.id,
+          actorUserId: user.id,
+          action: willBeInternal ? 'internal_note_added' : 'comment_added',
+        });
+      } catch {}
+
+      // Mark first response time when an admin posts the first public reply
+      if (isAdmin && !willBeInternal && !ticket.firstResponseAt) {
+        try {
+          await storage.updateSupportTicket(ticket.id, { firstResponseAt: new Date() });
+        } catch {}
+      }
+
+      // Outbound email pipeline: when an agent posts a non-internal reply, email
+      // the requester (and watchers) with proper RFC 5322 threading headers and
+      // a per-ticket Reply-To that loops back to the inbound webhook.
+      if (!willBeInternal && isAdmin) {
+        try {
+          const requesterEmail = ticket.externalRequesterEmail
+            || (ticket.userId ? (await storage.getUser(ticket.userId))?.email : null);
+          if (requesterEmail) {
+            const priorReplies: SupportTicketReply[] = await supportEmailStorage.getSupportTicketRepliesWithMessageIds(ticket.id);
+            const priorMessageIds = priorReplies.map(r => r.messageId).filter((m): m is string => !!m);
+            const watchers: SupportTicketWatcher[] = await supportEmailStorage.getSupportTicketWatchers(ticket.id);
+            const ccEmails = watchers
+              .map(w => w.externalEmail)
+              .filter((e): e is string => typeof e === "string" && !!e && e.toLowerCase() !== requesterEmail.toLowerCase());
+            const tenant = ticket.tenantId ? await storage.getTenant(ticket.tenantId) : null;
+            const staffName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || "Support";
+            const { sendStaffReplyEmail } = await import("../email-support");
+            const sentMessageId = await sendStaffReplyEmail({
+              ticket,
+              reply,
+              staffName,
+              requesterEmail,
+              ccEmails,
+              priorMessageIds,
+              tenantName: tenant?.name || null,
+              fromEmail: tenant?.supportFromEmail || null,
+              fromName: tenant?.supportFromName || null,
+              replyDomain: tenant?.supportReplyDomain || null,
+            });
+            if (sentMessageId) {
+              await supportEmailStorage.updateSupportTicketReply(reply.id, { messageId: sentMessageId });
+              reply.messageId = sentMessageId;
+            }
+            await supportEmailStorage.logSupportTicketActivity({ ticketId: ticket.id, actorUserId: user.id, action: "comment_added", note: "emailed requester" });
+          }
+        } catch (mailErr) {
+          console.error("[SUPPORT] Failed to email staff reply:", mailErr);
+        }
+      }
 
       return res.status(201).json(reply);
     } catch (error) {
@@ -279,7 +484,8 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       }
 
       const isOwner = ticket.userId === user.id;
-      const isAdmin = isConstellationAdmin(user.role);
+      const staff = isStaff(user);
+      const isAdmin = staff && canStaffAccessTicket(user, ticket);
 
       if (!isOwner && !isAdmin) {
         return res.status(403).json({ error: "Access denied" });
@@ -310,6 +516,38 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       }
 
       const updated = await storage.updateSupportTicket(ticket.id, updates);
+
+      // Log activity rows for each tracked field change
+      try {
+        const trackedFields = [
+          'status', 'priority', 'assignedTo', 'queueId', 'ticketType', 'category',
+        ] as const;
+        type TrackedField = typeof trackedFields[number];
+        const fieldFromTicket = (t: typeof ticket, f: TrackedField): string | null => {
+          const v = t[f];
+          return v == null ? null : String(v);
+        };
+        const fieldFromUpdates = (u: typeof updates, f: TrackedField): string | null | undefined => {
+          if (!(f in u)) return undefined;
+          const v = u[f];
+          return v == null ? null : String(v);
+        };
+        for (const field of trackedFields) {
+          const newVal = fieldFromUpdates(updates, field);
+          if (newVal === undefined) continue;
+          const oldVal = fieldFromTicket(ticket, field);
+          if ((oldVal ?? '') !== (newVal ?? '')) {
+            await s.logSupportTicketActivity({
+              ticketId: ticket.id,
+              actorUserId: user.id,
+              action: field === 'assignedTo' ? 'assigned' : `${field}_changed`,
+              fieldName: field,
+              oldValue: oldVal,
+              newValue: newVal,
+            });
+          }
+        }
+      } catch (e) { /* non-fatal */ }
 
       const isBeingClosed = (updates.status === "resolved" || updates.status === "closed") 
         && ticket.status !== 'resolved' && ticket.status !== 'closed';
@@ -555,5 +793,101 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       console.error("Error syncing existing tickets:", error);
       return res.status(500).json({ error: "Failed to sync existing tickets", message: error?.message });
     }
+  });
+
+  // ===== Saved filters (per-user, scoped to user's tenant) =====
+  app.get("/api/support/saved-filters", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const filters = await s.getSupportSavedFilters(user.id, user.tenantId || null);
+    return res.json(filters);
+  });
+
+  const savedFilterSchema = z.object({
+    name: z.string().min(1).max(80),
+    query: z.record(z.any()),
+    isPinned: z.boolean().optional(),
+    sortOrder: z.number().int().optional(),
+  });
+
+  app.post("/api/support/saved-filters", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const parsed = savedFilterSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
+    // Tenant binding is server-side: never trust the client.
+    const created = await s.createSupportSavedFilter({
+      userId: user.id,
+      tenantId: user.tenantId || null,
+      name: parsed.data.name,
+      query: parsed.data.query,
+      isPinned: parsed.data.isPinned || false,
+      sortOrder: parsed.data.sortOrder || 0,
+    });
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/support/saved-filters/:id", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const parsed = savedFilterSchema.partial().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
+    const updated = await s.updateSupportSavedFilter(req.params.id, user.id, parsed.data);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    return res.json(updated);
+  });
+
+  app.delete("/api/support/saved-filters/:id", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    await s.deleteSupportSavedFilter(req.params.id, user.id);
+    return res.status(204).end();
+  });
+
+  // ===== Full-text search (Postgres tsvector) =====
+  app.get("/api/support/search", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const q = (req.query.q as string || "").trim();
+    if (!q || q.length < 2) return res.json({ tickets: [], replies: [] });
+    const isPlatformRole = isPlatformAdminUser(user);
+    // Platform admins can pass a tenantId to scope; everyone else is locked to their own tenant.
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
+    const [tickets, replies] = await Promise.all([
+      s.searchSupportTickets({ tenantId, q, limit }),
+      s.searchSupportTicketReplies({ tenantId, q, limit }),
+    ]);
+    return res.json({ tickets, replies });
+  });
+
+  // ===== Analytics (60s cache) =====
+  let analyticsCache = new Map<string, { at: number; data: any }>();
+  app.get("/api/support/analytics", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const isPlatformRole = isPlatformAdminUser(user);
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const key = `t:${tenantId || "__all__"}`;
+    const now = Date.now();
+    const hit = analyticsCache.get(key);
+    if (hit && now - hit.at < 60_000) {
+      res.setHeader("X-Cache", "HIT");
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.json(hit.data);
+    }
+    const data = await s.getSupportAnalytics(tenantId);
+    analyticsCache.set(key, { at: now, data });
+    // Drop old keys eventually
+    if (analyticsCache.size > 200) analyticsCache = new Map();
+    res.setHeader("X-Cache", "MISS");
+    res.setHeader("Cache-Control", "private, max-age=60");
+    return res.json(data);
   });
 }

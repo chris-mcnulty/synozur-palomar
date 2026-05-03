@@ -2,18 +2,37 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_TYPES } from "@shared/schema";
+import { rateLimitDb, getClientIp } from "../lib/support-ratelimit";
 
 const s = storage as any;
 
-// Simple in-memory rate limiter for public lookup endpoints (per-IP, sliding window).
-const lookupRateBuckets = new Map<string, number[]>();
-function rateLimit(ip: string, max: number, windowMs: number): boolean {
-  const now = Date.now();
-  const arr = (lookupRateBuckets.get(ip) || []).filter(t => now - t < windowMs);
-  if (arr.length >= max) { lookupRateBuckets.set(ip, arr); return false; }
-  arr.push(now);
-  lookupRateBuckets.set(ip, arr);
-  return true;
+// DB-backed sliding-window limiter — durable across restarts and instances.
+async function rateLimit(key: string, max: number, windowMs: number): Promise<boolean> {
+  return rateLimitDb(key, max, windowMs);
+}
+
+// Resolve a tenant from the request. Explicit `tenantId` (query/body) wins.
+// Otherwise we match by host against the tenant's configured custom domain.
+// The schema stores host config in `customSubdomain` (the only host field on
+// `tenants`), which may hold either a bare subdomain prefix (e.g. "acme")
+// or a full hostname (e.g. "support.acme.com"). We also check
+// `branding.customDomain` for tenants that override the host via the
+// branding JSON. Both shapes are matched as either a subdomain prefix
+// ("acme.<root>") or as the full hostname.
+async function resolveTenantId(req: Request, explicit?: string | null): Promise<string | null> {
+  if (explicit) return explicit;
+  const host = (req.get("host") || "").split(":")[0].toLowerCase();
+  if (!host) return null;
+  const tenants = (await s.getAllTenants?.()) || [];
+  const matches = (candidate: unknown) => {
+    if (!candidate) return false;
+    const v = String(candidate).toLowerCase();
+    return host === v || host.startsWith(v + ".");
+  };
+  const match = tenants.find((t: any) =>
+    matches(t.customSubdomain) || matches(t.branding?.customDomain),
+  );
+  return match?.id || null;
 }
 
 // Public-but-token-protected endpoints. Anyone holding the magic token can view
@@ -71,8 +90,8 @@ export function registerSupportPortalRoutes(app: Express) {
   // Lookup by ticket # + email (no token, e.g. user lost their link)
   app.post("/api/portal/lookup", async (req: Request, res: Response) => {
     try {
-      const ip = (req.ip || req.headers["x-forwarded-for"] || "unknown").toString();
-      if (!rateLimit(`lookup:${ip}`, 10, 60_000)) {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`lookup:${ip}`, 10, 60_000))) {
         return res.status(429).json({ error: "Too many requests. Please wait a minute." });
       }
       const body = z.object({
@@ -82,17 +101,7 @@ export function registerSupportPortalRoutes(app: Express) {
       }).safeParse(req.body);
       if (!body.success) return res.status(400).json({ error: "Validation failed", details: body.error.errors });
 
-      let tenantId = body.data.tenantId;
-      if (!tenantId) {
-        // Try to derive from request hostname (subdomain routing). Fallback to all tenants is unsafe.
-        const host = (req.get("host") || "").split(":")[0];
-        const tenants = await s.getAllTenants?.() || [];
-        const match = tenants.find((t: any) =>
-          (t.subdomain && host.startsWith(t.subdomain + ".")) ||
-          (t.customDomain && host === t.customDomain)
-        );
-        if (match) tenantId = match.id;
-      }
+      const tenantId = await resolveTenantId(req, body.data.tenantId || null);
       if (!tenantId) return res.status(400).json({ error: "tenantId is required when not on a tenant subdomain" });
 
       const ticket = await s.getSupportTicketByNumberAndEmail(tenantId, body.data.ticketNumber, body.data.email);
@@ -195,8 +204,8 @@ export function registerSupportPortalRoutes(app: Express) {
   // a tenant context derived from request host or explicit tenantId param.
   app.post("/api/portal/tickets", async (req: Request, res: Response) => {
     try {
-      const ip = (req.ip || req.headers["x-forwarded-for"] || "unknown").toString();
-      if (!rateLimit(`create:${ip}`, 5, 60_000)) {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`create:${ip}`, 5, 60_000))) {
         return res.status(429).json({ error: "Too many requests. Please wait a minute." });
       }
       const body = z.object({
@@ -211,16 +220,7 @@ export function registerSupportPortalRoutes(app: Express) {
       }).safeParse(req.body);
       if (!body.success) return res.status(400).json({ error: "Validation failed", details: body.error.errors });
 
-      let tenantId = body.data.tenantId;
-      if (!tenantId) {
-        const host = (req.get("host") || "").split(":")[0];
-        const tenants = await s.getAllTenants?.() || [];
-        const match = tenants.find((t: any) =>
-          (t.subdomain && host.startsWith(t.subdomain + ".")) ||
-          (t.customDomain && host === t.customDomain)
-        );
-        if (match) tenantId = match.id;
-      }
+      const tenantId = await resolveTenantId(req, body.data.tenantId || null);
       if (!tenantId) return res.status(400).json({ error: "tenantId required" });
 
       const crypto = await import("crypto");
@@ -258,6 +258,11 @@ export function registerSupportPortalRoutes(app: Express) {
       const portalUrl = `${APP_URL}/portal/ticket/${portalToken}`;
 
       try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(ticket.id, { actorLabel: "portal" });
+      } catch {}
+
+      try {
         const { sendExternalTicketConfirmation } = await import("../email-support");
         await sendExternalTicketConfirmation(ticket, { email: body.data.requesterEmail, name: body.data.requesterName }, portalUrl);
       } catch {}
@@ -269,28 +274,180 @@ export function registerSupportPortalRoutes(app: Express) {
     }
   });
 
+  // Public tenant info (branding) — used by the portal to display tenant name/logo/color
+  app.get("/api/portal/tenant", async (req: Request, res: Response) => {
+    try {
+      const tenantId = await resolveTenantId(req, (req.query.tenantId as string) || null);
+      if (!tenantId) return res.status(404).json({ error: "Tenant not found" });
+      const t = await s.getTenant(tenantId);
+      if (!t) return res.status(404).json({ error: "Tenant not found" });
+      return res.json({
+        id: t.id,
+        name: t.name,
+        slug: t.slug,
+        logoUrl: t.logoUrl || null,
+        logoUrlDark: t.logoUrlDark || null,
+        color: t.color || null,
+        primaryColor: t.branding?.primaryColor || t.color || null,
+      });
+    } catch {
+      return res.status(500).json({ error: "Failed to load tenant" });
+    }
+  });
+
+  // Single bootstrap call for the portal SPA — returns everything the portal
+  // needs to brand itself plus public capabilities. Cheaper and atomic vs
+  // multiple round-trips.
+  app.get("/api/portal/bootstrap", async (req: Request, res: Response) => {
+    try {
+      const tenantId = await resolveTenantId(req, (req.query.tenantId as string) || null);
+      if (!tenantId) return res.status(404).json({ error: "Tenant not found" });
+      const t = await s.getTenant(tenantId);
+      if (!t) return res.status(404).json({ error: "Tenant not found" });
+      const primaryColor = t.branding?.primaryColor || t.color || null;
+      const tenantName = t.name || "Support";
+      const supportEmail = t.supportFromEmail || null;
+      const fromName = t.supportFromName || `${tenantName} Support`;
+      const pageTitle = (t.branding as any)?.portalPageTitle || `${tenantName} Help Center`;
+      return res.json({
+        tenant: {
+          id: t.id,
+          name: tenantName,
+          slug: t.slug,
+          logoUrl: t.logoUrl || null,
+          logoUrlDark: t.logoUrlDark || null,
+          primaryColor,
+          color: t.color || null,
+        },
+        branding: {
+          primaryColor,
+          logoUrl: t.logoUrl || null,
+          pageTitle,
+          fromName,
+          supportEmail,
+        },
+        capabilities: {
+          publicTickets: true,
+          kbEnabled: true,
+          csat: true,
+        },
+      });
+    } catch (err: any) {
+      console.error("[PORTAL] bootstrap failed:", err);
+      return res.status(500).json({ error: "Failed to load portal bootstrap" });
+    }
+  });
+
   // Public KB list (only published+public articles)
   app.get("/api/portal/kb", async (req: Request, res: Response) => {
     try {
-      const tenantId = req.query.tenantId as string | undefined;
+      const tenantId = await resolveTenantId(req, (req.query.tenantId as string) || null);
       if (!tenantId) return res.status(400).json({ error: "tenantId required" });
-      const articles = await s.getSupportKbArticles(tenantId, { visibility: "public", published: true, search: req.query.q as string | undefined });
-      return res.json(articles.map((a: any) => ({ id: a.id, slug: a.slug, title: a.title, summary: a.summary, tags: a.tags, updatedAt: a.updatedAt })));
+      const articles = await s.getSupportKbArticles(tenantId, {
+        visibility: "public",
+        published: true,
+        search: (req.query.q as string) || undefined,
+      });
+      const limit = Math.min(Number(req.query.limit) || 50, 100);
+      return res.json(articles.slice(0, limit).map((a: any) => ({
+        id: a.id,
+        slug: a.slug,
+        title: a.title,
+        summary: a.summary,
+        tags: a.tags,
+        viewCount: a.viewCount,
+        helpfulCount: a.helpfulCount,
+        notHelpfulCount: a.notHelpfulCount,
+        updatedAt: a.updatedAt,
+      })));
     } catch (err: any) {
       return res.status(500).json({ error: "Failed to load KB" });
     }
   });
 
-  app.get("/api/portal/kb/:tenantId/:slug", async (req: Request, res: Response) => {
+  app.get("/api/portal/kb/:slug", async (req: Request, res: Response) => {
     try {
-      const article = await s.getSupportKbArticleBySlug(req.params.tenantId, req.params.slug);
+      const tenantId = await resolveTenantId(req, (req.query.tenantId as string) || null);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const article = await s.getSupportKbArticleBySlug(tenantId, req.params.slug);
       if (!article || article.visibility !== "public" || !article.publishedAt) {
         return res.status(404).json({ error: "Article not found" });
       }
       await s.incrementKbArticleViewCount(article.id);
-      return res.json(article);
+      return res.json({
+        id: article.id,
+        slug: article.slug,
+        title: article.title,
+        summary: article.summary,
+        body: article.body,
+        tags: article.tags,
+        viewCount: (article.viewCount || 0) + 1,
+        helpfulCount: article.helpfulCount,
+        notHelpfulCount: article.notHelpfulCount,
+        publishedAt: article.publishedAt,
+        updatedAt: article.updatedAt,
+      });
     } catch (err: any) {
       return res.status(500).json({ error: "Failed to load article" });
+    }
+  });
+
+  // Per-article thumbs up/down feedback (rate-limited per IP+article)
+  app.post("/api/portal/kb/:id/feedback", async (req: Request, res: Response) => {
+    try {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`kbfb:${ip}:${req.params.id}`, 3, 60_000))) {
+        return res.status(429).json({ error: "Too many requests" });
+      }
+      const body = z.object({
+        helpful: z.boolean(),
+        sessionId: z.string().max(128).optional(),
+      }).safeParse(req.body);
+      if (!body.success) return res.status(400).json({ error: "Validation failed" });
+      const article = await s.getSupportKbArticleById(req.params.id);
+      if (!article || article.visibility !== "public" || !article.publishedAt) {
+        return res.status(404).json({ error: "Article not found" });
+      }
+      await s.recordKbArticleFeedback(article.id, body.data.helpful);
+      await s.recordSupportEvent({
+        tenantId: article.tenantId,
+        eventType: body.data.helpful ? "kb_helpful" : "kb_not_helpful",
+        articleId: article.id,
+        sessionId: body.data.sessionId || null,
+      });
+      return res.json({ ok: true });
+    } catch {
+      return res.status(500).json({ error: "Failed to record feedback" });
+    }
+  });
+
+  // Generic portal analytics event (deflection, etc.)
+  app.post("/api/portal/events", async (req: Request, res: Response) => {
+    try {
+      const ip = getClientIp(req);
+      if (!(await rateLimit(`evt:${ip}`, 30, 60_000))) {
+        return res.status(429).json({ error: "Too many requests" });
+      }
+      const body = z.object({
+        tenantId: z.string().optional(),
+        eventType: z.string().min(1).max(64),
+        articleId: z.string().optional(),
+        sessionId: z.string().max(128).optional(),
+        metadata: z.record(z.any()).optional(),
+      }).safeParse(req.body);
+      if (!body.success) return res.status(400).json({ error: "Validation failed" });
+      const tenantId = await resolveTenantId(req, body.data.tenantId || null);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      await s.recordSupportEvent({
+        tenantId,
+        eventType: body.data.eventType,
+        articleId: body.data.articleId || null,
+        sessionId: body.data.sessionId || null,
+        metadata: body.data.metadata || null,
+      });
+      return res.json({ ok: true });
+    } catch {
+      return res.status(500).json({ error: "Failed to record event" });
     }
   });
 }

@@ -11,21 +11,20 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Lock,
   Mail,
-  BarChart3,
-  Clock,
-  FileText,
-  Users,
-  Calculator,
-  Receipt,
-  Brain,
-  AlertTriangle,
-  Blocks,
+  LifeBuoy,
+  Inbox,
+  BookOpen,
+  Globe2,
+  Plug,
+  Timer,
   ArrowRight,
   ChevronRight,
-  Star,
+  Sparkles,
   Shield,
-  Zap,
   Cloud,
+  Users,
+  Building2,
+  GaugeCircle,
 } from "lucide-react";
 import { SynozurLogo } from "@/components/icons/synozur-logo";
 import { SynozurAppSwitcher } from "@/components/synozur-app-switcher";
@@ -64,7 +63,7 @@ export default function Login() {
     const params = new URLSearchParams(window.location.search);
     const sessionId = params.get('sessionId');
     const error = params.get('error');
-    
+
     if (sessionId) {
       localStorage.setItem('sessionId', sessionId);
       window.location.href = "/";
@@ -99,7 +98,7 @@ export default function Login() {
   }, [navigate, toast]);
 
   const loginMutation = useMutation({
-    mutationFn: (credentials: { email: string; password: string }) => 
+    mutationFn: (credentials: { email: string; password: string }) =>
       apiRequest("/api/auth/login", {
         method: "POST",
         body: JSON.stringify(credentials),
@@ -130,73 +129,67 @@ export default function Login() {
 
   const primaryFeatures = [
     {
-      icon: Calculator,
-      title: "Project Estimates",
-      description: "Build detailed, multi-phase estimates with hierarchical rate precedence, Excel/CSV import/export, and AI-generated narratives.",
+      icon: LifeBuoy,
+      title: "Agent Console",
+      description: "A dense, fast workspace for your team: saved views, queue routing, SLA badges, internal notes, and a related-KB sidebar that surfaces answers as you read each ticket.",
       highlight: true,
-      color: "from-violet-500 to-purple-600",
       lightColor: "bg-violet-500/10",
       iconColor: "text-violet-400",
     },
     {
-      icon: Receipt,
-      title: "Expense Management",
-      description: "Complete expense lifecycle with approval workflows, automated per diem calculations, and contractor reimbursement invoicing.",
+      icon: Globe2,
+      title: "No-Login Customer Portal",
+      description: "Tenant-branded magic-link portal for requesters. Submit, track, reply, and rate tickets without an account. KB browse and inline ticket deflection built in.",
       highlight: false,
-      color: "from-emerald-500 to-teal-600",
       lightColor: "bg-emerald-500/10",
       iconColor: "text-emerald-400",
     },
     {
-      icon: Blocks,
-      title: "Microsoft 365 Integration",
-      description: "SharePoint Embedded for secure, private document storage per organization. Outlook for notifications, Planner for task sync, and Azure AD for enterprise SSO.",
+      icon: Inbox,
+      title: "Email That Just Works",
+      description: "Microsoft Graph-backed inbound mail with RFC 5322 threading, durable subscriptions, attachment ingestion, and a per-tenant outbound reply pipeline. Bounces and auto-replies are filtered automatically.",
       highlight: false,
-      color: "from-blue-500 to-cyan-600",
       lightColor: "bg-blue-500/10",
       iconColor: "text-blue-400",
     },
     {
-      icon: Brain,
-      title: "AI-Powered Intelligence",
-      description: "Powered by Azure AI Foundry with advanced models including GPT-5.4. AI-generated estimate narratives, status reports, invoice descriptions, and smart insights.",
+      icon: Timer,
+      title: "SLA Tracking & Escalation",
+      description: "Per-priority response and resolution targets, automatic breach detection every minute, escalation emails to queue contacts and watchers, and optional priority bumping on breach.",
       highlight: false,
-      color: "from-amber-500 to-orange-600",
       lightColor: "bg-amber-500/10",
       iconColor: "text-amber-400",
     },
     {
-      icon: BarChart3,
-      title: "Status Reports & Financials",
-      description: "Revenue, cost, profit, and margin analysis by client and project with KPI dashboards and health scoring.",
+      icon: Plug,
+      title: "External API for Your Apps",
+      description: "Bearer/API-key endpoints let any SYNOZUR application file, read, and update tickets on behalf of its users — with per-app metrics like open count and 7-day breach rate.",
       highlight: false,
-      color: "from-rose-500 to-pink-600",
       lightColor: "bg-rose-500/10",
       iconColor: "text-rose-400",
     },
     {
-      icon: AlertTriangle,
-      title: "Risk & Issue Management",
-      description: "Track risks, actions, issues, decisions, and dependencies (RAIDD) at portfolio and project levels.",
+      icon: BookOpen,
+      title: "Knowledge Base & Deflection",
+      description: "Author public or internal articles with view counters and helpful/not-helpful feedback. The new-ticket form proactively suggests the top three matching articles before a ticket is ever created.",
       highlight: false,
-      color: "from-sky-500 to-indigo-600",
       lightColor: "bg-sky-500/10",
       iconColor: "text-sky-400",
     },
   ];
 
   const quickFeatures = [
-    { icon: Clock, title: "Time Tracking", description: "Track billable hours across projects and resources" },
-    { icon: FileText, title: "Invoice Generation", description: "Automated invoicing with milestone and expense support" },
-    { icon: BarChart3, title: "Financial Reports", description: "Real-time profitability and margin analytics" },
-    { icon: Users, title: "Resource Management", description: "Capacity planning and allocation management" },
+    { icon: LifeBuoy, title: "Tickets", description: "Queues, SLAs, watchers, CSAT" },
+    { icon: Inbox, title: "Email Channel", description: "Threaded inbound + outbound replies" },
+    { icon: Globe2, title: "Customer Portal", description: "No-login magic-link access" },
+    { icon: Plug, title: "External API", description: "Other SYNOZUR apps file tickets" },
   ];
 
   const capabilities = [
-    { icon: Shield, title: "Multi-Tenant Isolation", description: "Complete data isolation with role-based access" },
-    { icon: Users, title: "Resource Planning", description: "Capacity planning with conflict detection" },
-    { icon: Cloud, title: "Cloud-Native", description: "Azure AD SSO and enterprise security" },
-    { icon: Zap, title: "Automated Workflows", description: "Scheduled jobs and email reminders" },
+    { icon: Building2, title: "Multi-Tenant", description: "Isolated data, branding, and SLAs per organization" },
+    { icon: GaugeCircle, title: "Live Analytics", description: "Volume, breach rate, MTTR, and CSAT trends" },
+    { icon: Cloud, title: "M365 Native", description: "Graph mailboxes, Planner sync, Azure AD SSO" },
+    { icon: Shield, title: "Enterprise Security", description: "API keys, HMAC webhooks, durable rate limiting" },
   ];
 
   const structuredData = [
@@ -205,7 +198,7 @@ export default function Login() {
       "@type": "Organization",
       name: "Synozur",
       url: "https://www.synozur.com",
-      description: "Synozur is the creator of Constellation, a consulting delivery platform for professional services firms.",
+      description: "Synozur is the creator of Constellation, a multi-tenant support platform for modern teams.",
       brand: {
         "@type": "Brand",
         name: "Constellation",
@@ -218,7 +211,7 @@ export default function Login() {
       applicationCategory: "BusinessApplication",
       operatingSystem: "Web",
       description:
-        "Constellation by Synozur is the consulting delivery platform for professional services. Manage project estimates, expenses, invoicing, time tracking, and financial reporting in one place.",
+        "Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, an external API for filing tickets from other applications, SLA tracking, and a knowledge base.",
       url: "https://constellation.synozur.com/",
       creator: {
         "@type": "Organization",
@@ -231,26 +224,26 @@ export default function Login() {
   return (
     <>
       <Helmet>
-        <title>Constellation | Synozur Consulting Delivery Platform</title>
+        <title>Constellation | Synozur Support Platform</title>
         <meta
           name="description"
-          content="Constellation by Synozur is the consulting delivery platform built for professional services firms. Manage project estimates, expenses, invoicing, time tracking, and financial reporting — all in one place."
+          content="Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API that lets your other applications file tickets."
         />
         <link rel="canonical" href="https://constellation.synozur.com/" />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://constellation.synozur.com/" />
-        <meta property="og:title" content="Constellation | Synozur Consulting Delivery Platform" />
+        <meta property="og:title" content="Constellation | Synozur Support Platform" />
         <meta
           property="og:description"
-          content="Constellation by Synozur is the consulting delivery platform built for professional services firms. Manage project estimates, expenses, invoicing, time tracking, and financial reporting — all in one place."
+          content="Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API."
         />
         <meta property="og:image" content="https://constellation.synozur.com/og-image.jpg" />
         <meta property="og:site_name" content="Constellation by Synozur" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Constellation | Synozur Consulting Delivery Platform" />
+        <meta name="twitter:title" content="Constellation | Synozur Support Platform" />
         <meta
           name="twitter:description"
-          content="Constellation by Synozur is the consulting delivery platform built for professional services firms. Manage project estimates, expenses, invoicing, time tracking, and financial reporting — all in one place."
+          content="Constellation by Synozur is a multi-tenant support platform with M365 email integration, a no-login customer portal, SLA tracking, knowledge base, and an external API."
         />
         <meta name="twitter:image" content="https://constellation.synozur.com/og-image.jpg" />
         {structuredData.map((schema, i) => (
@@ -271,13 +264,18 @@ export default function Login() {
               <span className="text-xs text-gray-500 ml-2">by Synozur</span>
             </div>
           </div>
-          <a href="#sign-in" className="text-sm text-gray-400 hover:text-white transition-colors">
-            Sign In <ArrowRight className="inline w-3.5 h-3.5 ml-1" />
-          </a>
+          <div className="flex items-center gap-5">
+            <a href="/portal" className="hidden sm:inline text-sm text-gray-400 hover:text-white transition-colors">
+              Customer Portal
+            </a>
+            <a href="#sign-in" className="text-sm text-gray-400 hover:text-white transition-colors">
+              Sign In <ArrowRight className="inline w-3.5 h-3.5 ml-1" />
+            </a>
+          </div>
         </div>
       </nav>
 
-      {/* Hero Section with Star Trails */}
+      {/* Hero Section */}
       <section aria-label="Hero — Sign in to Constellation" className="relative pt-16 overflow-hidden">
         <div className="absolute inset-0 bg-gray-950" />
         <div
@@ -296,22 +294,23 @@ export default function Login() {
                 className="hidden lg:block h-14 w-auto mb-6"
               />
               <div className="flex items-center gap-2 mb-5">
-                <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+                <Sparkles className="w-4 h-4 text-amber-400" />
                 <span className="text-amber-300/90 text-xs font-semibold tracking-widest uppercase">
-                  Consulting Delivery Platform
+                  Multi-Tenant Support Platform
                 </span>
               </div>
               <h1 className="text-4xl lg:text-5xl xl:text-6xl font-bold leading-tight mb-6">
-                The Consulting Delivery Platform
+                Support That Scales
                 <br />
                 <span className="cosmic-text">
-                  Built for the Stars
+                  Across Every Channel
                 </span>
               </h1>
               <p className="text-base lg:text-lg text-gray-300 max-w-lg mb-8 leading-relaxed">
-                Constellation brings clarity to consulting delivery. From detailed
-                project estimates to automated invoicing, manage your entire
-                practice with precision and intelligence.
+                Constellation unifies email, a no-login customer portal, and a
+                first-class API for your other applications — with queues,
+                SLAs, knowledge base, and live analytics in one tenant-aware
+                workspace.
               </p>
               <div className="grid grid-cols-2 gap-3 mb-8">
                 {quickFeatures.map((feature) => {
@@ -328,11 +327,11 @@ export default function Login() {
                 })}
               </div>
               <p className="text-xs text-gray-500">
-                New to Constellation?{" "}
-                <a href="/signup" className="text-blue-400 hover:underline font-medium">
-                  Create an organization
+                Need help with an existing ticket?{" "}
+                <a href="/portal" className="text-blue-400 hover:underline font-medium">
+                  Visit the customer portal
                 </a>{" "}
-                and start your free trial today.
+                — no account required.
               </p>
             </div>
 
@@ -349,7 +348,7 @@ export default function Login() {
                     )}
                   </CardTitle>
                   <CardDescription className="text-center text-gray-400">
-                    Enter your credentials to access your workspace
+                    Staff access to the support workspace
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -386,8 +385,8 @@ export default function Login() {
                         />
                       </div>
                     </div>
-                    <Button 
-                      type="submit" 
+                    <Button
+                      type="submit"
                       className="w-full text-white font-semibold"
                       style={{ background: 'linear-gradient(to right, #810FFB, #9b3ffe)', }}
                       onMouseEnter={e => (e.currentTarget.style.background = 'linear-gradient(to right, #6f0de0, #810FFB)')}
@@ -398,7 +397,7 @@ export default function Login() {
                       {loginMutation.isPending ? "Signing in..." : "Sign In"}
                     </Button>
                   </form>
-                  
+
                   {!isDevelopment && (ssoStatus as any)?.configured === true && (
                     <>
                       <div className="relative my-4">
@@ -409,7 +408,7 @@ export default function Login() {
                           <span className="bg-gray-900 px-2 text-gray-500">Or</span>
                         </div>
                       </div>
-                      
+
                       <Button
                         type="button"
                         variant="secondary"
@@ -439,7 +438,7 @@ export default function Login() {
                       </Button>
                     </>
                   )}
-                  
+
                   {!isDevelopment && (
                     <p className="text-center text-sm text-gray-500 mt-4">
                       {(ssoStatus as any)?.configured === true
@@ -449,11 +448,17 @@ export default function Login() {
                     </p>
                   )}
 
-                  <div className="mt-4 pt-4 border-t border-white/10 text-center">
+                  <div className="mt-4 pt-4 border-t border-white/10 text-center space-y-2">
                     <p className="text-sm text-gray-500">
                       Don't have an account?{" "}
                       <a href="/signup" className="text-blue-400 hover:underline font-medium">
                         Create your organization
+                      </a>
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      A customer with a ticket?{" "}
+                      <a href="/portal" className="text-blue-400 hover:underline font-medium">
+                        Open the portal
                       </a>
                     </p>
                   </div>
@@ -469,11 +474,11 @@ export default function Login() {
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-14">
             <h2 className="text-3xl lg:text-4xl font-bold text-white mb-4">
-              Everything You Need to Deliver Excellence
+              Everything Modern Support Needs
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Purpose-built for consulting firms, Constellation covers every
-              aspect of project delivery and financial management.
+              One platform for the agents working tickets, the customers raising
+              them, and the applications that need to file them programmatically.
             </p>
           </div>
 
@@ -493,7 +498,7 @@ export default function Login() {
                   {feature.highlight && (
                     <div className="absolute -top-3 left-6">
                       <span className="bg-gradient-to-r from-violet-600 to-purple-600 text-white text-xs font-semibold px-3 py-1 rounded-full">
-                        Core Feature
+                        Agent Workspace
                       </span>
                     </div>
                   )}
@@ -513,66 +518,91 @@ export default function Login() {
         </div>
       </section>
 
-      {/* Estimates Spotlight */}
-      <section aria-label="Project estimates spotlight" className="relative py-20 overflow-hidden">
+      {/* Three-Door Spotlight: Agents · Customers · Apps */}
+      <section aria-label="Three ways into Constellation" className="relative py-20 overflow-hidden">
         <div
           className="absolute inset-0 bg-cover bg-center opacity-10"
           style={{ backgroundImage: `url(${secondaryImage})` }}
         />
         <div className="absolute inset-0 bg-gradient-to-r from-gray-950 via-gray-950/95 to-gray-950/90" />
         <div className="relative z-10 max-w-7xl mx-auto px-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            <div>
-              <div className="flex items-center gap-2 mb-4">
-                <Calculator className="w-5 h-5 text-violet-400" />
-                <span className="text-violet-400 text-xs font-semibold tracking-widest uppercase">
-                  Spotlight
-                </span>
+          <div className="text-center mb-12">
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <Sparkles className="w-5 h-5 text-violet-400" />
+              <span className="text-violet-400 text-xs font-semibold tracking-widest uppercase">
+                Three doors, one platform
+              </span>
+            </div>
+            <h2 className="text-3xl font-bold text-white">
+              For agents, customers, and applications
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Agents */}
+            <div className="rounded-2xl border border-white/10 bg-gray-900/60 p-6">
+              <div className="w-10 h-10 rounded-lg bg-violet-500/10 flex items-center justify-center mb-4">
+                <Users className="w-5 h-5 text-violet-400" />
               </div>
-              <h2 className="text-3xl font-bold text-white mb-4">
-                Project Estimates That Win Work
-              </h2>
-              <p className="text-gray-400 text-base leading-relaxed mb-6">
-                Constellation's estimation engine is purpose-built for
-                consulting firms. Create detailed, multi-phase estimates with
-                sophisticated rate hierarchies, resource planning, and
-                AI-powered narrative generation.
-              </p>
-              <ul className="space-y-3 mb-8">
+              <h3 className="text-lg font-semibold text-white mb-2">For your agents</h3>
+              <ul className="space-y-2.5">
                 {[
-                  "Multi-phase estimates with epics, stages, and line items",
-                  "Hierarchical rate precedence (Project > User > Organization)",
-                  "Excel/CSV import/export with template support",
-                  "AI-generated narratives and text export",
-                  "Status-based locking and approval workflows",
-                  "T&M, Fixed Price, and Retainer estimate types",
+                  "Saved views: My open, Unassigned, Breaching in 1h",
+                  "Inline status, priority, queue, assignee edits",
+                  "Public replies and internal notes side by side",
+                  "Postgres full-text search across tickets and replies",
+                  "Watchers, activity timeline, and related KB suggestions",
                 ].map((item) => (
-                  <li key={item} className="flex items-start gap-3">
-                    <ChevronRight className="w-4 h-4 text-violet-400 mt-1 flex-shrink-0" />
-                    <span className="text-sm text-gray-300">{item}</span>
+                  <li key={item} className="flex items-start gap-2 text-sm text-gray-300">
+                    <ChevronRight className="w-4 h-4 text-violet-400 mt-0.5 flex-shrink-0" />
+                    <span>{item}</span>
                   </li>
                 ))}
               </ul>
             </div>
-            <div className="relative">
-              <div className="rounded-2xl overflow-hidden shadow-2xl shadow-black/40 border border-white/10">
-                <img
-                  src={secondaryImage}
-                  alt="Constellation platform capabilities"
-                  className="w-full h-auto object-cover"
-                />
+
+            {/* Customers */}
+            <div className="rounded-2xl border border-white/10 bg-gray-900/60 p-6">
+              <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-4">
+                <Globe2 className="w-5 h-5 text-emerald-400" />
               </div>
-              <div className="absolute -bottom-4 -left-4 bg-gray-900 border border-white/10 rounded-xl p-4 shadow-lg">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center">
-                    <Zap className="w-5 h-5 text-emerald-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-white">AI-Powered</p>
-                    <p className="text-xs text-gray-400">Smart narratives & insights</p>
-                  </div>
-                </div>
+              <h3 className="text-lg font-semibold text-white mb-2">For your customers</h3>
+              <ul className="space-y-2.5">
+                {[
+                  "No-login portal with magic-link access",
+                  "Tenant logo, color, and from-name on every email",
+                  "Knowledge base browse with article feedback",
+                  "Inline article suggestions before they file a ticket",
+                  "CSAT rating after resolution",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-sm text-gray-300">
+                    <ChevronRight className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Apps */}
+            <div className="rounded-2xl border border-white/10 bg-gray-900/60 p-6">
+              <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center mb-4">
+                <Plug className="w-5 h-5 text-blue-400" />
               </div>
+              <h3 className="text-lg font-semibold text-white mb-2">For your other apps</h3>
+              <ul className="space-y-2.5">
+                {[
+                  "API keys minted as syn_<prefix>.<secret>",
+                  "File, fetch, and update tickets via REST",
+                  "HMAC-signed inbound email webhook",
+                  "Per-app metrics: open count, breach rate, awaiting customer",
+                  "Durable per-key rate limiting",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-sm text-gray-300">
+                    <ChevronRight className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         </div>
@@ -583,11 +613,11 @@ export default function Login() {
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-12">
             <h2 className="text-2xl font-bold text-white mb-3">
-              Built for Enterprise Consulting
+              Enterprise-Ready by Default
             </h2>
             <p className="text-gray-400 max-w-xl mx-auto">
-              Security, scalability, and automation designed for professional
-              services organizations.
+              Tenant isolation, Microsoft 365 integration, and operational
+              visibility — without the integration project.
             </p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -607,6 +637,28 @@ export default function Login() {
               );
             })}
           </div>
+        </div>
+      </section>
+
+      {/* CTA Strip */}
+      <section aria-label="Customer portal call-to-action" className="py-12 bg-gradient-to-r from-violet-950/40 via-gray-950 to-blue-950/40 border-y border-white/5">
+        <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
+              <LifeBuoy className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-white">Already have a ticket?</h3>
+              <p className="text-sm text-gray-400">Track status, reply, and rate resolution from the customer portal — no login needed.</p>
+            </div>
+          </div>
+          <a
+            href="/portal"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-200 hover:bg-emerald-500/25 transition-colors text-sm font-medium"
+          >
+            Open the portal
+            <ArrowRight className="w-4 h-4" />
+          </a>
         </div>
       </section>
 

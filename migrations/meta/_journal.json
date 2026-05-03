@@ -5,15 +5,22 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1776466104351,
-      "tag": "0000_agent_card_health_checks",
+      "when": 1777788817456,
+      "tag": "0000_init_consulting_essentials",
       "breakpoints": true
     },
     {
-      "idx": 1,
+      "idx": 2,
       "version": "7",
-      "when": 1777588860270,
-      "tag": "0001_add_cascade_audit_fields",
+      "when": 1777786561553,
+      "tag": "0003_sla_breach_watcher",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777786936193,
+      "tag": "0002_whole_phantom_reporter",
       "breakpoints": true
     }
   ]

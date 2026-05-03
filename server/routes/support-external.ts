@@ -3,8 +3,27 @@ import { z } from "zod";
 import crypto from "crypto";
 import { storage } from "../storage";
 import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_TYPES } from "@shared/schema";
+import { rateLimitMiddleware } from "../lib/support-ratelimit";
 
 const s = storage as any;
+
+// Per-API-key rate limiting for external endpoints. Uses the durable
+// Postgres-backed sliding window limiter; falls back to IP if a key wasn't
+// presented (auth will reject anyway, but this protects against pre-auth
+// scanners hammering the endpoint).
+const externalRateLimit = rateLimitMiddleware({
+  bucket: "ext",
+  max: 120,
+  windowMs: 60_000,
+  keyFn: (req) => {
+    const auth = (req.header("authorization") || "").toLowerCase();
+    const headerKey = req.header("x-synozur-api-key");
+    const plain = auth.startsWith("bearer ") ? auth.substring(7).trim() : (headerKey || "").trim();
+    const prefix = plain.split(".")[0] || "";
+    if (prefix) return `key:${prefix}`;
+    return `ip:${(req.ip || req.headers["x-forwarded-for"] || "anon").toString()}`;
+  },
+});
 
 // Hash an API key with a per-record salt baked into the hash format: sha256(prefix + ":" + secret)
 function hashKey(plain: string): string {
@@ -49,7 +68,7 @@ const externalCreateTicketSchema = z.object({
 
 export function registerSupportExternalRoutes(app: Express) {
   // POST /api/external/v1/support/tickets — file a ticket from a SYNOZUR app
-  app.post("/api/external/v1/support/tickets", authenticateAppKey, async (req: Request, res: Response) => {
+  app.post("/api/external/v1/support/tickets", externalRateLimit, authenticateAppKey, async (req: Request, res: Response) => {
     try {
       const key = (req as any).appIntegrationKey;
       const parsed = externalCreateTicketSchema.safeParse(req.body);
@@ -106,6 +125,11 @@ export function registerSupportExternalRoutes(app: Express) {
         note: data.externalReferenceId ? `External ref: ${data.externalReferenceId}` : null,
       });
 
+      try {
+        const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
+        await autoAssignTicketToQueueMember(ticket.id, { actorLabel: `API:${key.applicationName}` });
+      } catch {}
+
       const APP_URL = process.env.APP_PUBLIC_URL || `https://${req.get("host")}`;
       const portalUrl = `${APP_URL}/portal/ticket/${portalToken}`;
 
@@ -129,7 +153,7 @@ export function registerSupportExternalRoutes(app: Express) {
   });
 
   // GET /api/external/v1/support/tickets/:id — read status
-  app.get("/api/external/v1/support/tickets/:id", authenticateAppKey, async (req: Request, res: Response) => {
+  app.get("/api/external/v1/support/tickets/:id", externalRateLimit, authenticateAppKey, async (req: Request, res: Response) => {
     try {
       const key = (req as any).appIntegrationKey;
       const t = await s.getSupportTicketById(req.params.id);
@@ -156,7 +180,7 @@ export function registerSupportExternalRoutes(app: Express) {
   });
 
   // POST /api/external/v1/support/tickets/:id/replies — append from a SYNOZUR app
-  app.post("/api/external/v1/support/tickets/:id/replies", authenticateAppKey, async (req: Request, res: Response) => {
+  app.post("/api/external/v1/support/tickets/:id/replies", externalRateLimit, authenticateAppKey, async (req: Request, res: Response) => {
     try {
       const key = (req as any).appIntegrationKey;
       const t = await s.getSupportTicketById(req.params.id);
@@ -184,9 +208,25 @@ export function registerSupportExternalRoutes(app: Express) {
   });
 
   // Healthcheck for SYNOZUR apps to verify their key
-  app.get("/api/external/v1/support/whoami", authenticateAppKey, (req: Request, res: Response) => {
+  app.get("/api/external/v1/support/whoami", externalRateLimit, authenticateAppKey, (req: Request, res: Response) => {
     const key = (req as any).appIntegrationKey;
     res.json({ ok: true, application: key.applicationName, tenantId: key.tenantId, scopes: key.scopes || [] });
+  });
+
+  // Per-app-key metrics — surfaces a small set of operational counters that an
+  // external app can pull to render its own status widget. Scoped to the
+  // tenant the key belongs to AND filtered to tickets opened by this same key
+  // (so apps don't see neighbouring traffic).
+  app.get("/api/external/v1/support/metrics", externalRateLimit, authenticateAppKey, async (req: Request, res: Response) => {
+    try {
+      const key = (req as any).appIntegrationKey;
+      const metrics = await s.getSupportMetricsForAppKey(key.tenantId, key.id);
+      res.setHeader("Cache-Control", "private, max-age=30");
+      return res.json(metrics);
+    } catch (err: any) {
+      console.error("[EXT-API] metrics failed:", err);
+      return res.status(500).json({ error: "Failed to fetch metrics" });
+    }
   });
 }
 

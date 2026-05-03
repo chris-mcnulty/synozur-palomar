@@ -1,22 +1,16 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, timestamp, boolean, date, jsonb, uuid, uniqueIndex, index, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, jsonb, index, uniqueIndex, unique } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Estimate status enum
-export const estimateStatusEnum = z.enum(['draft', 'final', 'sent', 'approved', 'rejected']);
-export type EstimateStatus = z.infer<typeof estimateStatusEnum>;
+// ============================================================================
+// SHARED TYPES / ENUMS
+// ============================================================================
 
-// Expense approval status enum
-export const expenseApprovalStatusEnum = z.enum(['draft', 'submitted', 'approved', 'rejected', 'reimbursed']);
-export type ExpenseApprovalStatus = z.infer<typeof expenseApprovalStatusEnum>;
-
-// Plan status enum
 export const planStatusEnum = z.enum(['active', 'trial', 'expired', 'cancelled', 'suspended']);
 export type PlanStatus = z.infer<typeof planStatusEnum>;
 
-// TenantBranding type for jsonb field
 export type TenantBranding = {
   primaryColor?: string;
   secondaryColor?: string;
@@ -27,64 +21,54 @@ export type TenantBranding = {
   reportFooterText?: string;
 };
 
-export type M365SharePointConfig = {
-  autoCreateProjectSubfolder?: boolean;
-  docLibraryNaming?: 'channel_name' | 'project_code' | 'custom';
-  docLibraryCustomPattern?: string;
-  metadataColumns?: string[];
-};
+// Support ticket enums
+export const TICKET_CATEGORIES = ['bug', 'feature_request', 'question', 'feedback'] as const;
+export const TICKET_PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
+export const TICKET_STATUSES = ['new', 'open', 'in_progress', 'pending', 'on_hold', 'resolved', 'closed', 'cancelled'] as const;
+export const TICKET_TYPES = ['incident', 'service_request', 'problem', 'change', 'question'] as const;
+export const TICKET_SOURCES = ['web', 'portal', 'email', 'api', 'phone', 'chat'] as const;
+export const TICKET_IMPACTS = ['low', 'medium', 'high'] as const;
+export const TICKET_URGENCIES = ['low', 'medium', 'high'] as const;
+
+export type TicketCategory = typeof TICKET_CATEGORIES[number];
+export type TicketPriority = typeof TICKET_PRIORITIES[number];
+export type TicketStatus = typeof TICKET_STATUSES[number];
+export type TicketType = typeof TICKET_TYPES[number];
+export type TicketSource = typeof TICKET_SOURCES[number];
 
 // ============================================================================
-// MULTI-TENANCY TABLES (Phase 1 - Matches Vega Architecture)
+// MULTI-TENANCY: SERVICE PLANS, TENANTS, BLOCKED DOMAINS
 // ============================================================================
 
-// Service Plans (Subscription Tiers)
 export const servicePlans = pgTable("service_plans", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   internalName: varchar("internal_name", { length: 100 }).notNull().unique(),
   displayName: varchar("display_name", { length: 255 }).notNull(),
   description: text("description"),
-  
-  // Plan type: trial, team, enterprise, unlimited
   planType: varchar("plan_type", { length: 50 }).notNull(),
-  
-  // Limits (null = unlimited)
   maxUsers: integer("max_users").default(5),
-  maxProjects: integer("max_projects"),
-  maxClients: integer("max_clients"),
-  
-  // Features
   aiEnabled: boolean("ai_enabled").default(true),
-  sharePointEnabled: boolean("sharepoint_enabled").default(false),
   ssoEnabled: boolean("sso_enabled").default(false),
   customBrandingEnabled: boolean("custom_branding_enabled").default(false),
-  coBrandingEnabled: boolean("co_branding_enabled").default(true),
-  subdomainEnabled: boolean("subdomain_enabled").default(false),
-  plannerEnabled: boolean("planner_enabled").default(false),
-  
-  // Trial settings
   trialDurationDays: integer("trial_duration_days"),
-  
-  // Pricing (internal billing for MVP)
   monthlyPriceCents: integer("monthly_price_cents"),
   annualPriceCents: integer("annual_price_cents"),
-  billingCycle: varchar("billing_cycle", { length: 20 }), // monthly, annual, both
-  
-  // Status
+  billingCycle: varchar("billing_cycle", { length: 20 }),
   isActive: boolean("is_active").default(true),
   isDefault: boolean("is_default").default(false),
   displayOrder: integer("display_order").default(0),
-  
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
-// Tenants (Organizations) - Matches Vega structure
+export const insertServicePlanSchema = createInsertSchema(servicePlans).omit({ id: true, createdAt: true });
+export type InsertServicePlan = z.infer<typeof insertServicePlanSchema>;
+export type ServicePlan = typeof servicePlans.$inferSelect;
+
 export const tenants = pgTable("tenants", {
-  // Core identity
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull().unique(),
   slug: varchar("slug", { length: 100 }).notNull().unique(),
-  
+
   // Branding
   color: text("color"),
   logoUrl: text("logo_url"),
@@ -92,14 +76,13 @@ export const tenants = pgTable("tenants", {
   faviconUrl: text("favicon_url"),
   customSubdomain: text("custom_subdomain"),
   branding: jsonb("branding").$type<TenantBranding>(),
-  
-  // Company Contact Info (for invoices/documents)
+
+  // Company contact info
   companyAddress: text("company_address"),
   companyPhone: text("company_phone"),
   companyEmail: text("company_email"),
   companyWebsite: text("company_website"),
-  paymentTerms: text("payment_terms"),
-  
+
   // Domain & SSO
   allowedDomains: jsonb("allowed_domains").$type<string[]>(),
   azureTenantId: text("azure_tenant_id"),
@@ -111,65 +94,39 @@ export const tenants = pgTable("tenants", {
   connectorSharePoint: boolean("connector_sharepoint").default(false),
   connectorOutlook: boolean("connector_outlook").default(false),
   connectorPlanner: boolean("connector_planner").default(false),
+  // Support email channel — per-tenant sender identity for outbound replies and
+  // the domain used in the per-ticket Reply-To address that loops back through
+  // the inbound webhook (e.g. ticket+<token>@support.<tenant>.com).
+  supportFromEmail: text("support_from_email"),
+  supportFromName: text("support_from_name"),
+  supportReplyDomain: text("support_reply_domain"),
   adminConsentGranted: boolean("admin_consent_granted").default(false),
   adminConsentGrantedAt: timestamp("admin_consent_granted_at"),
   adminConsentGrantedBy: varchar("admin_consent_granted_by"),
   
   // Customization
-  fiscalYearStartMonth: integer("fiscal_year_start_month").default(1),
   defaultTimezone: varchar("default_timezone", { length: 50 }).default("America/New_York"),
-  vocabularyOverrides: jsonb("vocabulary_overrides").$type<Record<string, string>>(),
-  
-  // Service Plan / Licensing
+
+  // Service plan
   servicePlanId: varchar("service_plan_id").references(() => servicePlans.id),
   planStartedAt: timestamp("plan_started_at"),
   planExpiresAt: timestamp("plan_expires_at"),
   planStatus: text("plan_status").default("active"),
-  
-  // Signup metadata
+
+  // Signup
   selfServiceSignup: boolean("self_service_signup").default(false),
   signupCompletedAt: timestamp("signup_completed_at"),
   organizationSize: text("organization_size"),
   industry: text("industry"),
   location: text("location"),
-  
-  // Invoice branding
-  showConstellationFooter: boolean("show_constellation_footer").default(true), // Show "Generated by Constellation" footer on invoices
-  
+
   // Email branding
-  emailHeaderUrl: text("email_header_url"), // Optional email header image for outgoing emails
-  
-  // Financial Defaults (tenant-scoped, not system-wide)
-  defaultBillingRate: decimal("default_billing_rate", { precision: 10, scale: 2 }).default('0'),
-  defaultCostRate: decimal("default_cost_rate", { precision: 10, scale: 2 }).default('0'),
-  mileageRate: decimal("mileage_rate", { precision: 10, scale: 4 }).default('0.70'),
-  defaultTaxRate: decimal("default_tax_rate", { precision: 5, scale: 2 }).default('0'),
-  invoiceDefaultDiscountType: text("invoice_default_discount_type").default('percent'),
-  invoiceDefaultDiscountValue: decimal("invoice_default_discount_value", { precision: 10, scale: 2 }).default('0'),
+  emailHeaderUrl: text("email_header_url"),
 
-  // Feature Settings
-  showChangelogOnLogin: boolean("show_changelog_on_login").default(true), // Show "What's New" modal to users on login
+  // Feature settings
+  showChangelogOnLogin: boolean("show_changelog_on_login").default(true),
 
-  // Notification Settings
-  expenseRemindersEnabled: boolean("expense_reminders_enabled").default(false),
-  expenseReminderTime: varchar("expense_reminder_time", { length: 5 }).default("08:00"),
-  expenseReminderDay: integer("expense_reminder_day").default(1),
-
-  // Teams Proactive Alert Settings
-  teamsAlertsEnabled: boolean("teams_alerts_enabled").default(false),
-  teamsWebhookUrl: text("teams_webhook_url"),
-  teamsAlertOnHealthChange: boolean("teams_alert_on_health_change").default(true),
-  teamsAlertOnRaiddOverdue: boolean("teams_alert_on_raidd_overdue").default(true),
-  teamsAlertOnStatusReportDue: boolean("teams_alert_on_status_report_due").default(true),
-  // Structured channel routing: { default?: {teamId, channelId}, health?: {...}, raidd?: {...}, statusReport?: {...} }
-  teamsNotificationChannels: jsonb("teams_notification_channels").$type<{
-    default?: { teamId: string; channelId: string };
-    health?: { teamId: string; channelId: string };
-    raidd?: { teamId: string; channelId: string };
-    statusReport?: { teamId: string; channelId: string };
-  }>(),
-  
-  // Support Ticket Integrations
+  // Support integrations (Planner)
   supportPlannerEnabled: boolean("support_planner_enabled").default(false),
   supportPlannerPlanId: varchar("support_planner_plan_id", { length: 255 }),
   supportPlannerPlanTitle: text("support_planner_plan_title"),
@@ -178,42 +135,15 @@ export const tenants = pgTable("tenants", {
   supportPlannerGroupName: text("support_planner_group_name"),
   supportPlannerBucketName: text("support_planner_bucket_name"),
   supportListsEnabled: boolean("support_lists_enabled").default(false),
-  
-  // GL Invoice Number Sequence
-  nextGlInvoiceNumber: integer("next_gl_invoice_number").default(1000),
 
-  // SharePoint Embedded (SPE) - Tenant-level container configuration
-  speContainerIdDev: text("spe_container_id_dev"),
-  speContainerIdProd: text("spe_container_id_prod"),
-  speStorageEnabled: boolean("spe_storage_enabled").default(false),
-  speMigrationStatus: text("spe_migration_status"),
-  speMigrationStartedAt: timestamp("spe_migration_started_at"),
-
-  // M365 Teams Integration Settings
-  m365AutoProvisionTeams: boolean("m365_auto_provision_teams").default(false),
-  m365DefaultTeamTemplate: text("m365_default_team_template").default("standard"),
-  m365DefaultChannelFolders: jsonb("m365_default_channel_folders").$type<string[]>(),
-  m365SharePointConfig: jsonb("m365_sharepoint_config").$type<M365SharePointConfig>(),
-  m365DefaultPursuitTeamId: text("m365_default_pursuit_team_id"),
-  m365DefaultPursuitTeamName: text("m365_default_pursuit_team_name"),
-
-  // PPTX Slide Template File IDs (stored in SPE under /pptx_templates)
-  pptxTitleTemplateFileId: text("pptx_title_template_file_id"),
-  pptxTitleTemplateFileName: text("pptx_title_template_file_name"),
-  pptxTitleTemplateUploadedAt: timestamp("pptx_title_template_uploaded_at"),
-  pptxSectionTemplateFileId: text("pptx_section_template_file_id"),
-  pptxSectionTemplateFileName: text("pptx_section_template_file_name"),
-  pptxSectionTemplateUploadedAt: timestamp("pptx_section_template_uploaded_at"),
-  pptxClosingTemplateFileId: text("pptx_closing_template_file_id"),
-  pptxClosingTemplateFileName: text("pptx_closing_template_file_name"),
-  pptxClosingTemplateUploadedAt: timestamp("pptx_closing_template_uploaded_at"),
-
-  // Timestamps
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
 
-// Blocked Email Domains (Platform-wide security)
+export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertTenant = z.infer<typeof insertTenantSchema>;
+export type Tenant = typeof tenants.$inferSelect;
+
 export const blockedDomains = pgTable("blocked_domains", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   domain: varchar("domain", { length: 255 }).notNull().unique(),
@@ -221,2697 +151,72 @@ export const blockedDomains = pgTable("blocked_domains", {
   blockedBy: varchar("blocked_by"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
+export const insertBlockedDomainSchema = createInsertSchema(blockedDomains).omit({ id: true, createdAt: true });
+export type InsertBlockedDomain = z.infer<typeof insertBlockedDomainSchema>;
+export type BlockedDomain = typeof blockedDomains.$inferSelect;
 
 // ============================================================================
-// END MULTI-TENANCY CORE TABLES (tenant_users and consultant_access below users)
+// USERS, TENANT MEMBERSHIP
 // ============================================================================
 
-// Users and Authentication (Person metadata)
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").unique(), // Now optional for contractors
+  email: text("email").unique(),
   name: text("name").notNull(),
   firstName: text("first_name"),
   lastName: text("last_name"),
   initials: text("initials"),
-  title: text("title"), // Job title for the person
-  role: text("role").notNull().default("employee"), // admin, billing-admin, pm, portfolio-manager, employee, executive
-  canLogin: boolean("can_login").notNull().default(false), // Controls authentication access
-  isAssignable: boolean("is_assignable").notNull().default(true), // Can be assigned to projects/estimates
-  roleId: varchar("role_id").references(() => roles.id), // Optional reference to standard role
-  customRole: text("custom_role"), // For non-standard roles
-  defaultBillingRate: decimal("default_billing_rate", { precision: 10, scale: 2 }), // Default billing rate
-  defaultCostRate: decimal("default_cost_rate", { precision: 10, scale: 2 }), // Default cost rate (internal)
-  isSalaried: boolean("is_salaried").notNull().default(false), // Salaried resources don't contribute to direct project costs
+  title: text("title"),
+  role: text("role").notNull().default("employee"),
+  canLogin: boolean("can_login").notNull().default(false),
   isActive: boolean("is_active").notNull().default(true),
-  receiveTimeReminders: boolean("receive_time_reminders").notNull().default(true), // Opt-in for weekly time entry reminders
-  receiveExpenseReminders: boolean("receive_expense_reminders").notNull().default(true), // Opt-in for weekly expense submission reminders
-  // Contractor billing profile fields (for generating expense invoices)
-  contractorBusinessName: text("contractor_business_name"), // Contractor's business/company name
-  contractorBusinessAddress: text("contractor_business_address"), // Contractor's business address
-  contractorBillingId: text("contractor_billing_id"), // Contractor's invoice/billing ID or tax ID
-  contractorPhone: text("contractor_phone"), // Contractor's phone number
-  contractorEmail: text("contractor_email"), // Contractor's billing email (may differ from login email)
   passwordHash: text("password_hash"),
-  // Multi-tenancy fields
-  primaryTenantId: varchar("primary_tenant_id").references(() => tenants.id), // User's primary/home tenant
-  platformRole: varchar("platform_role", { length: 50 }).default("user"), // user, constellation_consultant, constellation_admin, global_admin
+  primaryTenantId: varchar("primary_tenant_id").references(() => tenants.id),
+  platformRole: varchar("platform_role", { length: 50 }).default("user"),
   lastDismissedChangelogVersion: varchar("last_dismissed_changelog_version", { length: 50 }),
-  // SSO / Entra identity linking
-  authProvider: varchar("auth_provider", { length: 50 }), // 'local' | 'entra'
-  azureObjectId: varchar("azure_object_id", { length: 255 }), // Entra object ID (localAccountId)
-  // Capacity profile fields (Advanced Resource Management)
-  weeklyCapacityHours: decimal("weekly_capacity_hours", { precision: 5, scale: 2 }).default("40.00"),
-  capacityNotes: text("capacity_notes"), // e.g., "Not available Wednesdays", "20hr/week contract"
-  capacityEffectiveDate: date("capacity_effective_date"), // When this capacity setting takes effect
+  authProvider: varchar("auth_provider", { length: 50 }),
+  azureObjectId: varchar("azure_object_id", { length: 255 }),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
-// ============================================================================
-// MULTI-TENANCY USER TABLES (defined after users for FK references)
-// ============================================================================
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
 
-// User-Tenant Membership (many-to-many with roles)
 export const tenantUsers = pgTable("tenant_users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  
-  // Tenant-specific role (existing Constellation roles)
-  role: varchar("role", { length: 50 }).notNull().default("employee"), // admin, billing-admin, pm, portfolio-manager, employee, executive, client
-  
-  // Client association (for stakeholder/client role users)
-  clientId: varchar("client_id").references(() => clients.id, { onDelete: 'cascade' }),
-  stakeholderTitle: varchar("stakeholder_title", { length: 100 }),
-  
-  // Status
-  status: varchar("status", { length: 50 }).default("active"), // active, suspended, invited
-  
-  // Notification preferences (tenant-specific)
-  receiveFinancialAlerts: boolean("receive_financial_alerts").notNull().default(false),
-  
-  // Invitation tracking
+  role: varchar("role", { length: 50 }).notNull().default("employee"),
+  status: varchar("status", { length: 50 }).default("active"),
   invitedBy: varchar("invited_by").references(() => users.id),
   invitedAt: timestamp("invited_at"),
   joinedAt: timestamp("joined_at"),
-  
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 }, (table) => ({
-  uniqueUserTenantClient: uniqueIndex("unique_user_tenant_client").on(table.userId, table.tenantId, table.clientId),
+  uniqueUserTenant: uniqueIndex("unique_user_tenant").on(table.userId, table.tenantId),
   tenantIdx: index("idx_tenant_users_tenant").on(table.tenantId),
   userIdx: index("idx_tenant_users_user").on(table.userId),
-  clientIdx: index("idx_tenant_users_client").on(table.clientId),
 }));
 
-// Consultant Access (for Synozur consultants accessing client tenants)
-export const consultantAccess = pgTable("consultant_access", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  consultantUserId: varchar("consultant_user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  
-  // Access configuration
-  role: varchar("role", { length: 50 }).notNull(), // Their role in this tenant
-  grantedBy: varchar("granted_by").references(() => users.id),
-  grantedAt: timestamp("granted_at").notNull().default(sql`now()`),
-  
-  // Optional expiration
-  expiresAt: timestamp("expires_at"),
-  
-  // Notes
-  reason: text("reason"), // "Q1 2026 Implementation Project"
-  
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_consultant_access_tenant").on(table.tenantId),
-  consultantIdx: index("idx_consultant_access_consultant").on(table.consultantUserId),
-}));
-
-// ============================================================================
-// END MULTI-TENANCY TABLES
-// ============================================================================
-
-// Clients
-export const clients = pgTable("clients", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  name: text("name").notNull(),
-  shortName: text("short_name"), // Abbreviated name for display (e.g., "MSFT" for Microsoft)
-  status: text("status").notNull().default("pending"), // pending, active, inactive, archived
-  currency: text("currency").notNull().default("USD"),
-  billingContact: text("billing_contact"),
-  contactName: text("contact_name"),
-  contactAddress: text("contact_address"),
-  secondaryContactName: text("secondary_contact_name"),
-  secondaryContactEmail: text("secondary_contact_email"),
-  vocabularyOverrides: text("vocabulary_overrides"), // JSON string (DEPRECATED - kept for migration)
-  // Vocabulary term selections (overrides organization defaults)
-  epicTermId: varchar("epic_term_id").references(() => vocabularyCatalog.id),
-  stageTermId: varchar("stage_term_id").references(() => vocabularyCatalog.id),
-  workstreamTermId: varchar("workstream_term_id").references(() => vocabularyCatalog.id),
-  milestoneTermId: varchar("milestone_term_id").references(() => vocabularyCatalog.id),
-  activityTermId: varchar("activity_term_id").references(() => vocabularyCatalog.id),
-  // MSA (Master Services Agreement) tracking
-  msaDate: date("msa_date"), // Date MSA was signed
-  msaDocument: text("msa_document"), // File path/name for uploaded MSA document
-  hasMsa: boolean("has_msa").default(false), // Track if MSA exists
-  sinceDate: date("since_date"), // Client relationship start date (editable, can be derived from MSA date)
-  // NDA (Non-Disclosure Agreement) tracking
-  ndaDate: date("nda_date"), // Date NDA was signed
-  ndaDocument: text("nda_document"), // File path/name for uploaded NDA document
-  hasNda: boolean("has_nda").default(false), // Track if NDA exists
-  // Microsoft Teams integration
-  microsoftTeamId: text("microsoft_team_id"), // Azure Group/Team ID for this client
-  microsoftTeamName: text("microsoft_team_name"), // Display name of the Team
-  microsoftTeamWebUrl: text("microsoft_team_web_url"), // Web URL to open the Team in Teams
-  sharepointSiteUrl: text("sharepoint_site_url"), // Team's SharePoint site URL for status report publishing
-  // Payment terms override (e.g., "Net 30", "Net 45", "Due Upon Receipt")
-  paymentTerms: text("payment_terms"), // Overrides tenant default when set
-  // Payment method for invoices (e.g., "ACH Transfer", "Check", "Wire Transfer")
-  paymentMethod: text("payment_method").default("ACH Transfer"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_clients_tenant").on(table.tenantId),
-}));
-
-// Roles (for rate management)
-export const roles = pgTable("roles", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull(),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  defaultRackRate: decimal("default_rack_rate", { precision: 10, scale: 2 }).notNull(),
-  defaultCostRate: decimal("default_cost_rate", { precision: 10, scale: 2 }),
-  isAlwaysSalaried: boolean("is_always_salaried").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => [
-  unique().on(table.name, table.tenantId),
-]);
-
-// System Settings (configurable default values)
-export const systemSettings = pgTable("system_settings", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  settingKey: text("setting_key").notNull().unique(),
-  settingValue: text("setting_value").notNull(),
-  description: text("description"),
-  settingType: text("setting_type").notNull().default("string"), // string, number, boolean, json
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-// Airport Codes - IATA 3-letter airport codes (system-wide, no tenant scoping)
-export const airportCodes = pgTable("airport_codes", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  iataCode: varchar("iata_code", { length: 3 }).notNull().unique(), // 3-letter IATA code (e.g., "SEA", "JFK")
-  name: text("name").notNull(), // Airport name
-  municipality: text("municipality"), // City/town name
-  isoCountry: varchar("iso_country", { length: 2 }), // Country code (e.g., "US", "CA")
-  isoRegion: varchar("iso_region", { length: 10 }), // Region code (e.g., "US-WA", "US-NY")
-  airportType: text("airport_type"), // e.g., "large_airport", "medium_airport", "small_airport"
-  coordinates: text("coordinates"), // Lat/Long coordinates
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  iataCodeIdx: uniqueIndex("idx_airport_iata_code").on(table.iataCode),
-  countryIdx: index("idx_airport_country").on(table.isoCountry),
-  nameIdx: index("idx_airport_name").on(table.name),
-}));
-
-// OCONUS Per Diem Rates - Outside Continental US per diem rates (system-wide, no tenant scoping)
-// Data uploaded annually from DoD OCONUS Per Diem files (no API available)
-export const oconusPerDiemRates = pgTable("oconus_per_diem_rates", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  country: text("country").notNull(), // Country or US territory name (e.g., "GERMANY", "ALASKA")
-  location: text("location").notNull(), // City or location name (e.g., "BERLIN", "ANCHORAGE")
-  seasonStart: varchar("season_start", { length: 5 }).notNull(), // MM/DD format (e.g., "01/01", "04/01")
-  seasonEnd: varchar("season_end", { length: 5 }).notNull(), // MM/DD format (e.g., "12/31", "09/30")
-  lodging: integer("lodging").notNull(), // Lodging rate in USD
-  mie: integer("mie").notNull(), // Meals & Incidental Expenses (M&IE) rate in USD
-  proportionalMeals: integer("proportional_meals"), // Proportional meal rate (for partial days)
-  incidentals: integer("incidentals"), // Incidentals portion
-  maxPerDiem: integer("max_per_diem").notNull(), // Total max per diem (lodging + M&IE)
-  effectiveDate: varchar("effective_date", { length: 10 }), // MM/DD/YYYY format
-  fiscalYear: integer("fiscal_year").notNull(), // Fiscal year for this rate (e.g., 2026)
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  countryLocationIdx: index("idx_oconus_country_location").on(table.country, table.location),
-  countryIdx: index("idx_oconus_country").on(table.country),
-  fiscalYearIdx: index("idx_oconus_fiscal_year").on(table.fiscalYear),
-}));
-
-// Vocabulary Catalog - Predefined term options
-export const vocabularyCatalog = pgTable("vocabulary_catalog", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  termType: text("term_type").notNull(), // epic, stage, workstream, milestone, activity
-  termValue: text("term_value").notNull(), // The actual term (e.g., "Epic", "Program", "Release")
-  description: text("description"), // Optional description of the term
-  isSystemDefault: boolean("is_system_default").notNull().default(false), // True for default terms
-  isActive: boolean("is_active").notNull().default(true), // Can be deactivated but not deleted
-  sortOrder: integer("sort_order").notNull().default(0), // Display order in dropdowns
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  uniqueTermTypeValue: uniqueIndex("unique_term_type_value").on(table.termType, table.termValue),
-}));
-
-// Organization Vocabulary Settings - Tenant-level vocabulary selections
-export const organizationVocabulary = pgTable("organization_vocabulary", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  epicTermId: varchar("epic_term_id").references(() => vocabularyCatalog.id), // Selected Epic term
-  stageTermId: varchar("stage_term_id").references(() => vocabularyCatalog.id), // Selected Stage term
-  workstreamTermId: varchar("workstream_term_id").references(() => vocabularyCatalog.id), // Selected Workstream term
-  milestoneTermId: varchar("milestone_term_id").references(() => vocabularyCatalog.id), // Selected Milestone term
-  activityTermId: varchar("activity_term_id").references(() => vocabularyCatalog.id), // Selected Activity term
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_organization_vocabulary_tenant").on(table.tenantId),
-  uniqueTenant: uniqueIndex("unique_organization_vocabulary_tenant").on(table.tenantId), // Enforce one record per tenant
-}));
-
-// Client-to-Team mapping
-export const clientTeams = pgTable("client_teams", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  teamId: varchar("team_id", { length: 255 }).notNull(),
-  teamName: text("team_name"),
-  teamWebUrl: text("team_web_url"),
-  sharepointSiteId: varchar("sharepoint_site_id", { length: 255 }),
-  sharepointSiteUrl: text("sharepoint_site_url"),
-  createdBy: varchar("created_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  clientIdx: index("idx_client_teams_client").on(table.clientId),
-  tenantIdx: index("idx_client_teams_tenant").on(table.tenantId),
-  uniqueClient: unique("uq_client_teams_client").on(table.clientId),
-}));
-
-export const insertClientTeamSchema = createInsertSchema(clientTeams).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertClientTeam = z.infer<typeof insertClientTeamSchema>;
-export type ClientTeam = typeof clientTeams.$inferSelect;
-
-// Project-to-Channel mapping
-export const projectChannels = pgTable("project_channels", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  channelId: varchar("channel_id", { length: 255 }).notNull(),
-  channelName: text("channel_name"),
-  channelWebUrl: text("channel_web_url"),
-  plannerPlanId: varchar("planner_plan_id", { length: 255 }),
-  plannerPlanWebUrl: text("planner_plan_web_url"),
-  createdBy: varchar("created_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  projectIdx: index("idx_project_channels_project").on(table.projectId),
-  tenantIdx: index("idx_project_channels_tenant").on(table.tenantId),
-  uniqueProject: unique("uq_project_channels_project").on(table.projectId),
-}));
-
-export const insertProjectChannelSchema = createInsertSchema(projectChannels).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertProjectChannel = z.infer<typeof insertProjectChannelSchema>;
-export type ProjectChannel = typeof projectChannels.$inferSelect;
-
-// Estimate-to-Channel mapping
-export const estimateChannels = pgTable("estimate_channels", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  estimateId: varchar("estimate_id").notNull().references(() => estimates.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  teamId: varchar("team_id", { length: 255 }).notNull(),
-  teamName: text("team_name"),
-  channelId: varchar("channel_id", { length: 255 }).notNull(),
-  channelName: text("channel_name"),
-  channelWebUrl: text("channel_web_url"),
-  createdBy: varchar("created_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  estimateIdx: index("idx_estimate_channels_estimate").on(table.estimateId),
-  tenantIdx: index("idx_estimate_channels_tenant").on(table.tenantId),
-  uniqueEstimate: unique("uq_estimate_channels_estimate").on(table.estimateId),
-}));
-
-export const insertEstimateChannelSchema = createInsertSchema(estimateChannels).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertEstimateChannel = z.infer<typeof insertEstimateChannelSchema>;
-export type EstimateChannel = typeof estimateChannels.$inferSelect;
-
-// Teams folder templates - configurable folder structure for new channels
-export const teamsFolderTemplates = pgTable("teams_folder_templates", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  folderName: text("folder_name").notNull(),
-  sortOrder: integer("sort_order").notNull().default(0),
-  scope: text("scope").notNull().default("system"),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantScopeIdx: index("idx_folder_templates_tenant_scope").on(table.tenantId, table.scope),
-}));
-
-export const insertTeamsFolderTemplateSchema = createInsertSchema(teamsFolderTemplates).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertTeamsFolderTemplate = z.infer<typeof insertTeamsFolderTemplateSchema>;
-export type TeamsFolderTemplate = typeof teamsFolderTemplates.$inferSelect;
-
-export const DEFAULT_FOLDER_TEMPLATES = [
-  "Deliverables",
-  "SOW & Contracts",
-  "Meeting Notes",
-  "Status Reports",
-  "Working Documents",
-];
-
-export const DEFAULT_ESTIMATE_FOLDER_TEMPLATES = [
-  "Proposals",
-  "RFP Documents",
-  "Client Correspondence",
-  "Working Documents",
-];
-
-// Teams tab templates - configurable tab structure for new channels
-export const teamsTabTemplates = pgTable("teams_tab_templates", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  tabType: text("tab_type").notNull(), // e.g. "planner", "constellation", "website", "custom"
-  tabName: text("tab_name").notNull(),
-  sortOrder: integer("sort_order").notNull().default(0),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_tab_templates_tenant").on(table.tenantId),
-}));
-
-export const insertTeamsTabTemplateSchema = createInsertSchema(teamsTabTemplates).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertTeamsTabTemplate = z.infer<typeof insertTeamsTabTemplateSchema>;
-export type TeamsTabTemplate = typeof teamsTabTemplates.$inferSelect;
-
-export const DEFAULT_TAB_TEMPLATES = [
-  { tabType: "planner", tabName: "Planner" },
-  { tabType: "constellation", tabName: "Constellation" },
-];
-
-// Projects
-export const projects = pgTable("projects", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  clientId: varchar("client_id").notNull().references(() => clients.id),
-  name: text("name").notNull(),
-  description: text("description"), // Vision statement/overview (paragraph length)
-  code: text("code").notNull().unique(),
-  pm: varchar("pm").references(() => users.id), // Project Manager - reference to users table
-  startDate: date("start_date"),
-  endDate: date("end_date"), // Can be null for open-ended projects
-  commercialScheme: text("commercial_scheme").notNull(), // retainer, milestone, tm
-  retainerBalance: decimal("retainer_balance", { precision: 10, scale: 2 }), // Current retainer balance
-  retainerTotal: decimal("retainer_total", { precision: 10, scale: 2 }), // Total retainer value
-  baselineBudget: decimal("baseline_budget", { precision: 10, scale: 2 }),
-  sowValue: decimal("sow_value", { precision: 10, scale: 2 }), // SOW total value
-  sowDate: date("sow_date"), // Date SOW was signed
-  hasSow: boolean("has_sow").notNull().default(false), // Track if SOW exists
-  status: text("status").notNull().default("active"), // active, on-hold, completed, archived
-  // Financial tracking fields
-  estimatedTotal: decimal("estimated_total", { precision: 12, scale: 2 }), // From original estimate
-  sowTotal: decimal("sow_total", { precision: 12, scale: 2 }), // From signed contract  
-  actualCost: decimal("actual_cost", { precision: 12, scale: 2 }), // Calculated from time/expenses
-  billedTotal: decimal("billed_total", { precision: 12, scale: 2 }), // Total invoiced
-  profitMargin: decimal("profit_margin", { precision: 12, scale: 2 }), // Calculated variance
-  vocabularyOverrides: text("vocabulary_overrides"), // JSON string (DEPRECATED - kept for migration)
-  // Vocabulary term selections (overrides client and organization defaults)
-  epicTermId: varchar("epic_term_id").references(() => vocabularyCatalog.id),
-  stageTermId: varchar("stage_term_id").references(() => vocabularyCatalog.id),
-  workstreamTermId: varchar("workstream_term_id").references(() => vocabularyCatalog.id),
-  milestoneTermId: varchar("milestone_term_id").references(() => vocabularyCatalog.id),
-  activityTermId: varchar("activity_term_id").references(() => vocabularyCatalog.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_projects_tenant").on(table.tenantId),
-}));
-
-// Estimates
-export const estimates = pgTable("estimates", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  name: text("name").notNull(),
-  clientId: varchar("client_id").notNull().references(() => clients.id),
-  projectId: varchar("project_id").references(() => projects.id), // Optional - can create estimate without project
-  version: integer("version").notNull().default(1),
-  status: text("status").notNull().default("draft"), // draft, final, approved, rejected
-  estimateType: text("estimate_type").notNull().default("detailed"), // detailed, block, retainer, or program
-  pricingType: text("pricing_type").notNull().default("hourly"), // hourly or fixed
-  totalHours: decimal("total_hours", { precision: 10, scale: 2 }),
-  totalFees: decimal("total_fees", { precision: 10, scale: 2 }),
-  // Block estimate fields (for retainer/simple estimates)
-  blockHours: decimal("block_hours", { precision: 10, scale: 2 }),
-  blockDollars: decimal("block_dollars", { precision: 10, scale: 2 }),
-  blockDescription: text("block_description"),
-  // Fixed price field for block/retainer pricing
-  fixedPrice: decimal("fixed_price", { precision: 10, scale: 2 }),
-  // Output totals (customer-facing)
-  presentedTotal: decimal("presented_total", { precision: 10, scale: 2 }), // Total presented to customer
-  margin: decimal("margin", { precision: 5, scale: 2 }), // Margin percentage
-  validUntil: date("valid_until"),
-  estimateDate: date("estimate_date").notNull().default(sql`CURRENT_DATE`), // Backdateable estimate date
-  potentialStartDate: date("potential_start_date"), // Expected project start date for portfolio timeline
-  // Visible vocabulary customization (client can rename Epic/Stage/Activity)
-  epicLabel: text("epic_label").default("Epic"),
-  stageLabel: text("stage_label").default("Stage"),
-  activityLabel: text("activity_label").default("Activity"),
-  // Rack rate snapshot at time of estimate
-  rackRateSnapshot: jsonb("rack_rate_snapshot"), // Stores rates at time of estimate creation
-  // Factor multipliers (centralized values)
-  sizeSmallMultiplier: decimal("size_small_multiplier", { precision: 4, scale: 2 }).default('1.00'),
-  sizeMediumMultiplier: decimal("size_medium_multiplier", { precision: 4, scale: 2 }).default('1.05'),
-  sizeLargeMultiplier: decimal("size_large_multiplier", { precision: 4, scale: 2 }).default('1.10'),
-  complexitySmallMultiplier: decimal("complexity_small_multiplier", { precision: 4, scale: 2 }).default('1.00'),
-  complexityMediumMultiplier: decimal("complexity_medium_multiplier", { precision: 4, scale: 2 }).default('1.05'),
-  complexityLargeMultiplier: decimal("complexity_large_multiplier", { precision: 4, scale: 2 }).default('1.10'),
-  confidenceHighMultiplier: decimal("confidence_high_multiplier", { precision: 4, scale: 2 }).default('1.00'),
-  confidenceMediumMultiplier: decimal("confidence_medium_multiplier", { precision: 4, scale: 2 }).default('1.10'),
-  confidenceLowMultiplier: decimal("confidence_low_multiplier", { precision: 4, scale: 2 }).default('1.20'),
-  archived: boolean("archived").notNull().default(false), // Archive estimates to hide from default view
-  marginOverrideActive: boolean("margin_override_active").notNull().default(false),
-  marginOverridePercent: decimal("margin_override_percent", { precision: 5, scale: 2 }),
-  originalRatesSnapshot: jsonb("original_rates_snapshot"), // { [lineItemId]: originalRate } - stored when margin override is first applied
-  retainerConfig: jsonb("retainer_config"), // { monthCount, startMonth, rateTiers: [{name, rate, maxHours}] }
-  // Referral fee tracking (paid to sellers/referrers)
-  referralFeeType: text("referral_fee_type").default("none"), // 'none', 'percentage', 'flat'
-  referralFeePercent: decimal("referral_fee_percent", { precision: 5, scale: 2 }), // Percentage of total fees
-  referralFeeFlat: decimal("referral_fee_flat", { precision: 10, scale: 2 }), // Flat dollar amount
-  referralFeeAmount: decimal("referral_fee_amount", { precision: 10, scale: 2 }), // Calculated fee amount
-  referralFeePaidTo: text("referral_fee_paid_to"), // Name of seller/referrer
-  netRevenue: decimal("net_revenue", { precision: 12, scale: 2 }), // Total fees minus referral fee
-  proposalNarrative: text("proposal_narrative"),
-  proposalNarrativeGeneratedAt: timestamp("proposal_narrative_generated_at"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_estimates_tenant").on(table.tenantId),
-}));
-
-// Estimate Line Items (inputs) with factors
-export const estimateLineItems = pgTable("estimate_line_items", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  estimateId: varchar("estimate_id").notNull().references(() => estimates.id, { onDelete: 'cascade' }),
-  epicId: varchar("epic_id").references(() => estimateEpics.id), // Optional epic reference
-  stageId: varchar("stage_id").references(() => estimateStages.id), // Optional stage reference
-  description: text("description").notNull(),
-  category: text("category"), // Optional category/phase
-  workstream: text("workstream"), // Workstream name
-  week: integer("week"), // Week number (also used as startWeek for program estimates)
-  durationWeeks: integer("duration_weeks"), // Program estimates: how many weeks this block runs
-  utilizationPercent: integer("utilization_percent"), // Program estimates: 20/40/60/80/100 (% of 40hr week)
-  baseHours: decimal("base_hours", { precision: 10, scale: 2 }).notNull(),
-  factor: decimal("factor", { precision: 10, scale: 2 }).notNull().default(sql`1`), // Multiplier (e.g., 4 interviews × 3 hours)
-  rate: decimal("rate", { precision: 10, scale: 2 }).notNull().default(sql`0`), // Charge rate (customer-facing)
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }), // Cost rate (internal cost)
-  assignedUserId: varchar("assigned_user_id").references(() => users.id), // User assigned to this line item
-  roleId: varchar("role_id").references(() => roles.id), // Generic role assigned (alternative to specific user)
-  resourceName: text("resource_name"), // Name of assigned resource (denormalized for display)
-  size: text("size").notNull().default("small"), // small, medium, large
-  complexity: text("complexity").notNull().default("small"), // small, medium, large
-  confidence: text("confidence").notNull().default("high"), // high, medium, low
-  adjustedHours: decimal("adjusted_hours", { precision: 10, scale: 2 }).notNull(), // base_hours * factor * multipliers
-  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(), // adjusted_hours * rate (charge amount)
-  totalCost: decimal("total_cost", { precision: 10, scale: 2 }), // adjusted_hours * costRate (internal cost)
-  margin: decimal("margin", { precision: 10, scale: 2 }), // totalAmount - totalCost
-  marginPercent: decimal("margin_percent", { precision: 5, scale: 2 }), // (margin / totalAmount) * 100
-  referralMarkup: decimal("referral_markup", { precision: 10, scale: 2 }), // Referral fee allocated to this line item (based on margin contribution)
-  totalAmountWithReferral: decimal("total_amount_with_referral", { precision: 10, scale: 2 }), // totalAmount + referralMarkup (client-facing quoted price)
-  comments: text("comments"), // Optional comments
-  hasManualRateOverride: boolean("has_manual_rate_override").notNull().default(false), // Track manually edited rates
-  sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Client Rate Overrides - Default rates for a client (applies to new estimates only)
-export const clientRateOverrides = pgTable("client_rate_overrides", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: 'cascade' }),
-  subjectType: text("subject_type").notNull(), // 'role' or 'person' (validated in application layer)
-  subjectId: varchar("subject_id").notNull(), // roleId or userId
-  billingRate: decimal("billing_rate", { precision: 10, scale: 2 }), // Override billing rate
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }), // Override cost rate
-  effectiveStart: date("effective_start").notNull().default(sql`CURRENT_DATE`),
-  effectiveEnd: date("effective_end"), // null means ongoing
-  notes: text("notes"), // Optional explanation for the override
-  createdBy: varchar("created_by").references(() => users.id), // Who created this override
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  // Index for efficient lookups by client and subject
-  clientSubjectIdx: index("client_rate_overrides_client_subject_idx")
-    .on(table.clientId, table.subjectType, table.subjectId),
-}));
-
-// Estimate Rate Overrides - Custom rates for specific resources within an estimate
-export const estimateRateOverrides = pgTable("estimate_rate_overrides", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  estimateId: varchar("estimate_id").notNull().references(() => estimates.id, { onDelete: 'cascade' }),
-  lineItemIds: varchar("line_item_ids").array(), // Optional: specific line items this override applies to
-  subjectType: text("subject_type").notNull(), // 'role' or 'person' (validated in application layer)
-  subjectId: varchar("subject_id").notNull(), // roleId or userId
-  billingRate: decimal("billing_rate", { precision: 10, scale: 2 }), // Override billing rate
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }), // Override cost rate
-  effectiveStart: date("effective_start").notNull().default(sql`CURRENT_DATE`),
-  effectiveEnd: date("effective_end"), // null means ongoing
-  notes: text("notes"), // Optional explanation for the override
-  createdBy: varchar("created_by").references(() => users.id), // Who created this override
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  // Index for efficient lookups by estimate and subject
-  estimateSubjectIdx: index("estimate_rate_overrides_estimate_subject_idx")
-    .on(table.estimateId, table.subjectType, table.subjectId),
-}));
-
-// Estimate Milestone Payments (outputs)
-export const estimateMilestones = pgTable("estimate_milestones", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  estimateId: varchar("estimate_id").notNull().references(() => estimates.id, { onDelete: 'cascade' }),
-  name: text("name").notNull(), // e.g., "Phase 1 Delivery", "Project Kickoff"
-  description: text("description"),
-  amount: decimal("amount", { precision: 10, scale: 2 }), // Optional fixed amount
-  dueDate: date("due_date"), // Optional due date
-  percentage: decimal("percentage", { precision: 5, scale: 2 }), // Optional percentage of total
-  sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Estimate Shares (read-only access grants)
-export const estimateShares = pgTable("estimate_shares", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  estimateId: varchar("estimate_id").notNull().references(() => estimates.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  grantedBy: varchar("granted_by").notNull().references(() => users.id),
-  grantedAt: timestamp("granted_at").notNull().default(sql`now()`),
-}, (table) => ({
-  uniqueShare: index("estimate_shares_unique_idx").on(table.estimateId, table.userId),
-}));
-
-// Estimate hierarchy: Epic -> Stage -> Activity
-export const estimateEpics = pgTable("estimate_epics", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  estimateId: varchar("estimate_id").notNull().references(() => estimates.id),
-  name: text("name").notNull(),
-  order: integer("order").notNull(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const estimateStages = pgTable("estimate_stages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  epicId: varchar("epic_id").notNull().references(() => estimateEpics.id),
-  name: text("name").notNull(),
-  order: integer("order").notNull(),
-  startDate: date("start_date"),
-  endDate: date("end_date"),
-  retainerMonthIndex: integer("retainer_month_index"),
-  retainerMonthLabel: text("retainer_month_label"),
-  retainerMaxHours: decimal("retainer_max_hours", { precision: 10, scale: 2 }),
-  retainerStartDate: date("retainer_start_date"),
-  retainerEndDate: date("retainer_end_date"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const estimateActivities = pgTable("estimate_activities", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  stageId: varchar("stage_id").notNull().references(() => estimateStages.id),
-  name: text("name").notNull(),
-  order: integer("order").notNull(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Project Structure (copied from estimates when approved)
-export const projectEpics = pgTable("project_epics", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  estimateEpicId: varchar("estimate_epic_id").references(() => estimateEpics.id), // Link to original estimate epic
-  name: text("name").notNull(),
-  description: text("description"),
-  budgetHours: decimal("budget_hours", { precision: 10, scale: 2 }),
-  actualHours: decimal("actual_hours", { precision: 10, scale: 2 }).default('0'),
-  order: integer("order").notNull(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const projectStages = pgTable("project_stages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  epicId: varchar("epic_id").notNull().references(() => projectEpics.id, { onDelete: 'cascade' }),
-  name: text("name").notNull(),
-  order: integer("order").notNull(),
-  retainerMonthIndex: integer("retainer_month_index"),
-  retainerMonthLabel: text("retainer_month_label"),
-  retainerMaxHours: decimal("retainer_max_hours", { precision: 10, scale: 2 }),
-  retainerRateTiers: jsonb("retainer_rate_tiers"), // Optional: [{name, rate, maxHours}] for multi-rate months
-  retainerStartDate: date("retainer_start_date"),
-  retainerEndDate: date("retainer_end_date"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const projectActivities = pgTable("project_activities", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  stageId: varchar("stage_id").notNull().references(() => projectStages.id, { onDelete: 'cascade' }),
-  name: text("name").notNull(),
-  order: integer("order").notNull(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const projectWorkstreams = pgTable("project_workstreams", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  estimateWorkStreamId: varchar("estimate_workstream_id"), // Link to original estimate workstream if applicable
-  name: text("name").notNull(),
-  description: text("description"),
-  budgetHours: decimal("budget_hours", { precision: 10, scale: 2 }),
-  actualHours: decimal("actual_hours", { precision: 10, scale: 2 }).default('0'),
-  order: integer("order").notNull(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Unified Project Milestones (both delivery gates and payment milestones)
-export const projectMilestones = pgTable("project_milestones", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  projectEpicId: varchar("project_epic_id").references(() => projectEpics.id, { onDelete: 'cascade' }), // Optional for delivery milestones
-  estimateStageId: varchar("estimate_stage_id").references(() => estimateStages.id, { onDelete: 'set null' }), // Link to original estimate stage
-  estimateMilestoneId: varchar("estimate_milestone_id").references(() => estimateMilestones.id, { onDelete: 'set null' }), // Link to original estimate milestone
-  name: text("name").notNull(),
-  description: text("description"),
-  
-  // Type indicator
-  isPaymentMilestone: boolean("is_payment_milestone").notNull().default(false), // TRUE = payment due, FALSE = delivery gate
-  
-  // Timing fields
-  startDate: date("start_date"), // For delivery milestones
-  endDate: date("end_date"), // For delivery milestones
-  targetDate: date("target_date"), // When milestone should be achieved (replaces dueDate)
-  completedDate: date("completed_date"), // When actually completed
-  
-  // Payment fields (only used when isPaymentMilestone = true)
-  amount: decimal("amount", { precision: 10, scale: 2 }), // Payment amount
-  invoiceStatus: text("invoice_status"), // null, planned, invoiced, paid (replaces status for payment milestones)
-  
-  // Tracking fields
-  status: text("status").notNull().default('not-started'), // not-started, in-progress, completed, cancelled
-  budgetHours: decimal("budget_hours", { precision: 10, scale: 2 }),
-  actualHours: decimal("actual_hours", { precision: 10, scale: 2 }).default('0'),
-  
-  // References
-  sowId: varchar("sow_id").references(() => sows.id), // Reference to SOW/change order if edited
-  retainerStageId: varchar("retainer_stage_id").references(() => projectStages.id, { onDelete: 'set null' }), // Link to retainer stage for auto-generated payment milestones
-  sortOrder: integer("sort_order").notNull().default(0),
-  
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-// NOTE: projectPaymentMilestones has been consolidated into projectMilestones table
-// Use isPaymentMilestone flag to distinguish between delivery and payment milestones
-
-// Project Resource Allocations - mirrors estimate allocations for actual project work
-export const projectAllocations = pgTable("project_allocations", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  projectActivityId: varchar("project_activity_id").references(() => projectActivities.id),
-  projectMilestoneId: varchar("project_milestone_id").references(() => projectMilestones.id),
-  projectWorkstreamId: varchar("project_workstream_id").references(() => projectWorkstreams.id),
-  projectEpicId: varchar("project_epic_id").references(() => projectEpics.id, { onDelete: 'set null' }),
-  projectStageId: varchar("project_stage_id").references(() => projectStages.id, { onDelete: 'set null' }),
-  weekNumber: integer("week_number").notNull(), // Original week number from estimate
-  plannedStartDate: date("planned_start_date"), // Calculated from kickoff date
-  plannedEndDate: date("planned_end_date"), // End of week date
-  roleId: varchar("role_id").references(() => roles.id), // Role-based assignment
-  personId: varchar("person_id").references(() => users.id), // Person-based assignment
-  resourceName: text("resource_name"), // For unmatched resources from estimate
-  taskDescription: text("task_description"), // Description of the task/activity (copied from estimate or manually entered)
-  hours: decimal("hours", { precision: 10, scale: 2 }).notNull(),
-  pricingMode: text("pricing_mode").notNull(), // "role", "person", or "resource_name"
-  rackRate: decimal("rack_rate", { precision: 10, scale: 2 }).notNull(), // Snapshot of rate at time of assignment
-  billingRate: decimal("billing_rate", { precision: 10, scale: 2 }),
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }),
-  notes: text("notes"),
-  estimateLineItemId: varchar("estimate_line_item_id").references(() => estimateLineItems.id), // Link to original estimate
-  // Assignment tracking fields
-  status: text("status").notNull().default('open'), // open, in_progress, completed, cancelled
-  startedDate: date("started_date"), // Automatically set when status → in_progress
-  completedDate: date("completed_date"), // Automatically set when status → completed
-  roleInstanceLabel: text("role_instance_label"),
-  isBaseline: boolean("is_baseline").notNull().default(false),
-  baselineId: varchar("baseline_id"),
-  // Cascade date shift audit fields
-  priorPlannedStartDate: date("prior_planned_start_date"), // Preserved before a cascade shift
-  priorPlannedEndDate: date("prior_planned_end_date"),     // Preserved before a cascade shift
-  cascadeSourceMilestoneId: varchar("cascade_source_milestone_id"), // FK to the milestone that triggered the cascade
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_project_allocations_tenant").on(table.tenantId),
-}));
-
-export const projectBaselines = pgTable("project_baselines", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  name: text("name").notNull(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by").references(() => users.id),
-});
-
-// Project Engagements - tracks a user's overall engagement status on a project
-// Separate from individual allocations - tracks whether user is actively working on project
-export const projectEngagements = pgTable("project_engagements", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  status: text("status").notNull().default('active'), // active, complete
-  completedAt: timestamp("completed_at"),
-  completedBy: varchar("completed_by").references(() => users.id), // User who marked complete (self or admin/PM)
-  notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-// User Role Capabilities (multi-role mapping with proficiency levels)
-export const userRoleCapabilities = pgTable("user_role_capabilities", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  roleId: varchar("role_id").notNull().references(() => roles.id, { onDelete: 'cascade' }),
-  proficiencyLevel: text("proficiency_level").notNull().default("primary"), // primary, secondary, learning
-  customCostRate: decimal("custom_cost_rate", { precision: 10, scale: 2 }),
-  customBillingRate: decimal("custom_billing_rate", { precision: 10, scale: 2 }),
-  notes: text("notes"), // Certifications, experience notes
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  uniqueUserTenantRole: uniqueIndex("unique_user_tenant_role").on(table.tenantId, table.userId, table.roleId),
-  tenantIdx: index("idx_user_role_caps_tenant").on(table.tenantId),
-  userIdx: index("idx_user_role_caps_user").on(table.userId),
-  roleIdx: index("idx_user_role_caps_role").on(table.roleId),
-}));
-
-// Weekly staffing allocations (Weekly Staffing Grid)
-export const estimateAllocations = pgTable("estimate_allocations", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  activityId: varchar("activity_id").notNull().references(() => estimateActivities.id),
-  weekNumber: integer("week_number").notNull(), // Week is a number, not a date
-  roleId: varchar("role_id").references(() => roles.id), // Can be either role or person
-  personId: varchar("person_id").references(() => users.id),
-  personEmail: text("person_email"), // Optional email for person
-  hours: decimal("hours", { precision: 10, scale: 2 }).notNull(),
-  pricingMode: text("pricing_mode").notNull(), // "role" or "person"
-  rackRate: decimal("rack_rate", { precision: 10, scale: 2 }).notNull(), // Snapshot of rate at time of estimate
-  notes: text("notes"), // Additional notes for the allocation
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// User Rate Schedules (time-based rate management)
-export const userRateSchedules = pgTable("user_rate_schedules", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  effectiveStart: date("effective_start").notNull(),
-  effectiveEnd: date("effective_end"), // null means ongoing
-  billingRate: decimal("billing_rate", { precision: 10, scale: 2 }),
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by").references(() => users.id),
-});
-
-// Project Rate Overrides
-export const projectRateOverrides = pgTable("project_rate_overrides", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  effectiveStart: date("effective_start").notNull().default(sql`CURRENT_DATE`),
-  effectiveEnd: date("effective_end"), // null means ongoing
-  billingRate: decimal("billing_rate", { precision: 10, scale: 2 }),
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Rate overrides
-export const rateOverrides = pgTable("rate_overrides", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  scope: text("scope").notNull(), // "client" or "project"
-  scopeId: varchar("scope_id").notNull(), // clientId or projectId
-  subjectType: text("subject_type").notNull(), // "role" or "person"
-  subjectId: varchar("subject_id").notNull(), // roleId or personId
-  effectiveStart: date("effective_start").notNull(),
-  effectiveEnd: date("effective_end"),
-  rackRate: decimal("rack_rate", { precision: 10, scale: 2 }).notNull(),
-  chargeRate: decimal("charge_rate", { precision: 10, scale: 2 }),
-  precedence: integer("precedence").notNull().default(0), // Higher number = higher precedence
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Time entries
-export const timeEntries = pgTable("time_entries", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  personId: varchar("person_id").notNull().references(() => users.id),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  date: date("date").notNull(),
-  hours: decimal("hours", { precision: 10, scale: 2 }).notNull(),
-  phase: text("phase"),
-  billable: boolean("billable").notNull().default(true),
-  description: text("description"),
-  billedFlag: boolean("billed_flag").notNull().default(false),
-  statusReportedFlag: boolean("status_reported_flag").notNull().default(false),
-  billingRate: decimal("billing_rate", { precision: 10, scale: 2 }), // Billing rate at time of entry
-  costRate: decimal("cost_rate", { precision: 10, scale: 2 }), // Cost rate at time of entry
-  milestoneId: varchar("milestone_id").references(() => projectMilestones.id), // Optional milestone reference
-  workstreamId: varchar("workstream_id").references(() => projectWorkstreams.id), // Optional workstream reference
-  projectStageId: varchar("project_stage_id").references(() => projectStages.id),
-  allocationId: varchar("allocation_id").references(() => projectAllocations.id), // Optional link to project allocation/assignment
-  // Invoice batch locking fields
-  invoiceBatchId: text("invoice_batch_id").references(() => invoiceBatches.batchId),
-  locked: boolean("locked").notNull().default(false),
-  lockedAt: timestamp("locked_at"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_time_entries_tenant").on(table.tenantId),
-}));
-
-// Expenses
-export const expenses = pgTable("expenses", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  personId: varchar("person_id").notNull().references(() => users.id),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  projectResourceId: varchar("project_resource_id").references(() => users.id), // User assigned to this expense within the project
-  date: date("date").notNull(),
-  category: text("category").notNull(), // travel, hotel, meals, taxi, airfare, parking, entertainment, mileage, perdiem
-  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  quantity: decimal("quantity", { precision: 10, scale: 2 }), // Nullable, for tracking quantity (e.g., miles for mileage, days for per diem)
-  unit: text("unit"), // Nullable, for tracking unit of measurement (e.g., "mile" for mileage, "day" for per diem)
-  currency: text("currency").notNull().default("USD"),
-  billable: boolean("billable").notNull().default(true),
-  reimbursable: boolean("reimbursable").notNull().default(true),
-  description: text("description"),
-  vendor: text("vendor"), // Merchant/vendor name (e.g., Alaska Airlines, Starbucks, Hyatt)
-  receiptUrl: text("receipt_url"),
-  billedFlag: boolean("billed_flag").notNull().default(false),
-  // Airfare specific fields
-  departureAirport: text("departure_airport"), // Three-letter airport code (e.g., "SEA", "SFO")
-  arrivalAirport: text("arrival_airport"), // Three-letter airport code (e.g., "LAX", "JFK")
-  isRoundTrip: boolean("is_round_trip").default(false), // If true, shows both directions on invoice
-  // Per Diem specific fields
-  perDiemLocation: text("per_diem_location"), // Location string (e.g., "Washington, DC" or "ZIP 20001")
-  perDiemMealsRate: decimal("per_diem_meals_rate", { precision: 10, scale: 2 }), // GSA M&IE rate
-  perDiemLodgingRate: decimal("per_diem_lodging_rate", { precision: 10, scale: 2 }), // GSA lodging rate
-  perDiemBreakdown: jsonb("per_diem_breakdown"), // Detailed breakdown: { fullDays: 2, partialDays: 1, mealsTotal: 148, lodgingTotal: 200 }
-  // Per Diem day-by-day component selections (for meal deductions when client provides meals)
-  // Format: [{ date: "2025-01-24", isClientEngagement: true, breakfast: true, lunch: false, dinner: true, incidentals: true }]
-  perDiemDays: jsonb("per_diem_days"), // Array of day selections with meal component checkboxes
-  // Approval workflow fields
-  approvalStatus: text("approval_status").notNull().default("draft"), // draft, submitted, approved, rejected, reimbursed
-  submittedAt: timestamp("submitted_at"),
-  approvedAt: timestamp("approved_at"),
-  approvedBy: varchar("approved_by").references(() => users.id),
-  rejectedAt: timestamp("rejected_at"),
-  rejectedBy: varchar("rejected_by").references(() => users.id),
-  rejectionNote: text("rejection_note"),
-  reimbursedAt: timestamp("reimbursed_at"),
-  reimbursementBatchId: varchar("reimbursement_batch_id"), // Will reference reimbursementBatches
-  clientPaidAt: timestamp("client_paid_at"), // When client paid for this expense via invoice batch
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_expenses_tenant").on(table.tenantId),
-}));
-
-// Expense Attachments (for SharePoint file integration)
-export const expenseAttachments = pgTable("expense_attachments", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  expenseId: varchar("expense_id").notNull().references(() => expenses.id),
-  driveId: text("drive_id").notNull(), // SharePoint drive ID
-  itemId: text("item_id").notNull(), // SharePoint item ID
-  webUrl: text("web_url").notNull(), // SharePoint web URL
-  fileName: text("file_name").notNull(), // Original filename
-  contentType: text("content_type").notNull(), // MIME type
-  size: integer("size").notNull(), // File size in bytes
-  createdByUserId: varchar("created_by_user_id").notNull().references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Pending Receipts (for bulk upload before expense assignment)
-export const pendingReceipts = pgTable("pending_receipts", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  // Local file information
-  fileName: text("file_name").notNull(), // Stored filename
-  originalName: text("original_name").notNull(), // Original uploaded filename  
-  filePath: text("file_path").notNull(), // Local file system path
-  contentType: text("content_type").notNull(), // MIME type
-  size: integer("size").notNull(), // File size in bytes
-  
-  // Receipt metadata
-  projectId: varchar("project_id").references(() => projects.id), // Optional project assignment
-  uploadedBy: varchar("uploaded_by").notNull().references(() => users.id), // User who uploaded
-  status: text("status").notNull().default("pending"), // pending, assigned, processed
-  
-  // Receipt details (extracted/assigned)
-  receiptDate: date("receipt_date"), // Date from receipt
-  amount: decimal("amount", { precision: 10, scale: 2 }), // Receipt amount
-  currency: text("currency").default("USD"), // Currency
-  category: text("category"), // Expense category
-  vendor: text("vendor"), // Merchant/vendor name
-  description: text("description"), // Receipt description
-  isReimbursable: boolean("is_reimbursable").default(true), // Whether reimbursable
-  tags: text("tags"), // Additional categorization tags
-  
-  // Conversion tracking
-  expenseId: varchar("expense_id").references(() => expenses.id), // Set when converted to expense
-  assignedAt: timestamp("assigned_at"), // When converted to expense
-  assignedBy: varchar("assigned_by").references(() => users.id), // Who converted it
-  
-  // Timestamps
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-// Expense Reports - For grouping expenses into submission batches for approval
-export const expenseReports = pgTable("expense_reports", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  reportNumber: text("report_number").notNull().unique(), // Auto-generated report number (e.g., EXP-2025-10-001)
-  submitterId: varchar("submitter_id").notNull().references(() => users.id),
-  status: text("status").notNull().default("draft"), // draft, submitted, approved, rejected
-  title: text("title").notNull(), // User-provided title for the report
-  description: text("description"), // Optional description
-  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull().default("0"),
-  currency: text("currency").notNull().default("USD"),
-  // Workflow tracking
-  submittedAt: timestamp("submitted_at"),
-  approvedAt: timestamp("approved_at"),
-  approvedBy: varchar("approved_by").references(() => users.id),
-  rejectedAt: timestamp("rejected_at"),
-  rejectedBy: varchar("rejected_by").references(() => users.id),
-  rejectionNote: text("rejection_note"), // Admin's explanation for rejection
-  // Contractor invoice payment path (independent of reimbursement batches)
-  contractorInvoiceId: varchar("contractor_invoice_id"), // FK set after invoice is created (circular dep avoidance)
-  reimbursementStatus: text("reimbursement_status").default("pending"), // pending, paid (when paid via contractor invoice)
-  // Timestamps
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  submitterIdx: index("expense_reports_submitter_idx").on(table.submitterId),
-  statusIdx: index("expense_reports_status_idx").on(table.status),
-}));
-
-// Expense Report Items - Links individual expenses to expense reports
-export const expenseReportItems = pgTable("expense_report_items", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  reportId: varchar("report_id").notNull().references(() => expenseReports.id, { onDelete: 'cascade' }),
-  expenseId: varchar("expense_id").notNull().references(() => expenses.id, { onDelete: 'cascade' }),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  reportIdx: index("expense_report_items_report_idx").on(table.reportId),
-  expenseIdx: index("expense_report_items_expense_idx").on(table.expenseId),
-  uniqueExpensePerReport: uniqueIndex("unique_expense_per_report").on(table.reportId, table.expenseId),
-}));
-
-// Reimbursement Batches - For processing approved expenses for reimbursement
-export const reimbursementBatches = pgTable("reimbursement_batches", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  batchNumber: text("batch_number").notNull().unique(), // Auto-generated batch number (e.g., REIMB-2025-10-001)
-  status: text("status").notNull().default("pending"), // pending, under_review, processed
-  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull().default("0"),
-  currency: text("currency").notNull().default("USD"),
-  description: text("description"),
-  requestedBy: varchar("requested_by").references(() => users.id), // Employee who requested (or admin who created on behalf)
-  requestedForUserId: varchar("requested_for_user_id").references(() => users.id), // The employee being reimbursed
-  paymentReferenceNumber: text("payment_reference_number"), // Reference number when processed
-  // Approval tracking
-  approvedAt: timestamp("approved_at"),
-  approvedBy: varchar("approved_by").references(() => users.id),
-  processedAt: timestamp("processed_at"), // When reimbursement was actually processed/paid
-  processedBy: varchar("processed_by").references(() => users.id),
-  // Timestamps
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  statusIdx: index("reimbursement_batches_status_idx").on(table.status),
-}));
-
-export const reimbursementLineItems = pgTable("reimbursement_line_items", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  batchId: varchar("batch_id").notNull().references(() => reimbursementBatches.id),
-  expenseId: varchar("expense_id").notNull().references(() => expenses.id),
-  status: text("status").notNull().default("pending"), // pending, approved, declined
-  reviewNote: text("review_note"), // Finance reviewer's note
-  reviewedBy: varchar("reviewed_by").references(() => users.id),
-  reviewedAt: timestamp("reviewed_at"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  batchIdx: index("reimbursement_line_items_batch_idx").on(table.batchId),
-  expenseIdx: index("reimbursement_line_items_expense_idx").on(table.expenseId),
-}));
-
-// Contractor Invoices - Formal invoices submitted by contractors for approved expense reports
-export const contractorInvoices = pgTable("contractor_invoices", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  reportId: varchar("report_id").notNull().references(() => expenseReports.id, { onDelete: 'cascade' }),
-  invoiceNumber: text("invoice_number").notNull(),
-  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  currency: text("currency").notNull().default("USD"),
-  contractorUserId: varchar("contractor_user_id").notNull().references(() => users.id),
-  // Bill-to (recipient) fields
-  billToName: text("bill_to_name").notNull(),
-  billToAddress: text("bill_to_address"),
-  billToContact: text("bill_to_contact"),
-  // File storage reference for the PDF
-  pdfFileId: text("pdf_file_id"),
-  pdfFileName: text("pdf_file_name"),
-  // Status lifecycle: submitted -> approved -> paid
-  status: text("status").notNull().default("submitted"), // submitted, approved, paid
-  submittedAt: timestamp("submitted_at").notNull().default(sql`now()`),
-  approvedAt: timestamp("approved_at"),
-  approvedBy: varchar("approved_by").references(() => users.id),
-  paidAt: timestamp("paid_at"),
-  paidBy: varchar("paid_by").references(() => users.id),
-  paymentNote: text("payment_note"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  reportIdx: index("contractor_invoices_report_idx").on(table.reportId),
-  contractorIdx: index("contractor_invoices_contractor_idx").on(table.contractorUserId),
-  statusIdx: index("contractor_invoices_status_idx").on(table.status),
-  tenantIdx: index("contractor_invoices_tenant_idx").on(table.tenantId),
-}));
-
-// Add unique constraint for project rate overrides
-export const projectRateOverridesUniqueConstraint = sql`
-  CREATE UNIQUE INDEX IF NOT EXISTS project_rate_overrides_unique_idx 
-  ON project_rate_overrides(project_id, user_id, effective_start)
-`;
-
-// SOWs (Statements of Work) - One-to-many relationship with projects
-export const sows = pgTable("sows", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  type: text("type").notNull().default("initial"), // "initial" or "change_order"
-  name: text("name").notNull(), // e.g., "Initial SOW", "Change Order #1"
-  description: text("description"),
-  value: decimal("value", { precision: 10, scale: 2 }).notNull(), // Dollar value
-  hours: decimal("hours", { precision: 10, scale: 2 }), // Optional hour budget
-  documentUrl: text("document_url"), // Link to uploaded document
-  documentName: text("document_name"), // Original filename
-  signedDate: date("signed_date"),
-  effectiveDate: date("effective_date").notNull(),
-  expirationDate: date("expiration_date"),
-  status: text("status").notNull().default("draft"), // draft, pending, approved, rejected, expired
-  approvedBy: varchar("approved_by").references(() => users.id),
-  approvedAt: timestamp("approved_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  // Ensure only one approved or pending initial SOW per project
-  uniqueInitialSow: uniqueIndex("unique_initial_sow_per_project")
-    .on(table.projectId)
-    .where(sql`${table.type} = 'initial' AND ${table.status} IN ('approved', 'pending')`),
-}));
-
-// Keep change orders for backward compatibility but it will be replaced by SOWs with type="change_order"
-export const changeOrders = pgTable("change_orders", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  reason: text("reason").notNull(),
-  approvedOn: timestamp("approved_on"),
-  deltaHours: decimal("delta_hours", { precision: 10, scale: 2 }),
-  deltaFees: decimal("delta_fees", { precision: 10, scale: 2 }),
-  status: text("status").notNull().default("draft"), // draft, approved, rejected
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Project Budget History - Audit trail for budget changes
-export const projectBudgetHistory = pgTable("project_budget_history", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  changeType: text("change_type").notNull(), // "sow_approval", "change_order_approval", "manual_adjustment", "sow_rejection"
-  fieldChanged: text("field_changed").notNull(), // "sowTotal", "baselineBudget", "sowValue"
-  previousValue: decimal("previous_value", { precision: 12, scale: 2 }),
-  newValue: decimal("new_value", { precision: 12, scale: 2 }),
-  deltaValue: decimal("delta_value", { precision: 12, scale: 2 }), // Calculated: newValue - previousValue
-  sowId: varchar("sow_id").references(() => sows.id), // Reference to SOW if this change was triggered by SOW
-  changedBy: varchar("changed_by").notNull().references(() => users.id),
-  reason: text("reason"), // Optional explanation for manual adjustments
-  metadata: jsonb("metadata"), // Additional context (SOW name, type, etc.)
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Status Reports - Persisted status reports generated via AI
-export const statusReports = pgTable("status_reports", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").references(() => projects.id),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  title: text("title").notNull(),
-  reportType: text("report_type").notNull().default("text"), // text, pptx, executive_narrative
-  reportStyle: text("report_style").notNull().default("detailed_update"), // executive_brief, detailed_update, client_facing
-  periodStart: date("period_start").notNull(),
-  periodEnd: date("period_end").notNull(),
-  reportContent: text("report_content"), // Markdown content for text reports
-  status: text("status").notNull().default("draft"), // draft, final
-  speFileId: text("spe_file_id"),
-  speContainerId: text("spe_container_id"),
-  metadata: jsonb("metadata"), // { totalHours, totalBillableHours, totalExpenses, teamMemberCount, raidd counts, etc. }
-  generatedBy: varchar("generated_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  projectIdx: index("idx_status_reports_project").on(table.projectId),
-  tenantIdx: index("idx_status_reports_tenant").on(table.tenantId),
-}));
-
-export const statusReportsRelations = relations(statusReports, ({ one }) => ({
-  project: one(projects, { fields: [statusReports.projectId], references: [projects.id] }),
-  tenant: one(tenants, { fields: [statusReports.tenantId], references: [tenants.id] }),
-  generator: one(users, { fields: [statusReports.generatedBy], references: [users.id] }),
-}));
-
-export const insertStatusReportSchema = createInsertSchema(statusReports).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertStatusReport = z.infer<typeof insertStatusReportSchema>;
-export type StatusReport = typeof statusReports.$inferSelect;
-
-// Invoice batches
-export const invoiceBatches = pgTable("invoice_batches", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id), // Multi-tenancy: nullable during migration
-  batchId: text("batch_id").notNull().unique(),
-  // Support custom date ranges instead of just month
-  startDate: date("start_date").notNull(),
-  endDate: date("end_date").notNull(),
-  // Keep month for backward compatibility
-  month: date("month"),
-  pricingSnapshotDate: date("pricing_snapshot_date").notNull(),
-  discountPercent: decimal("discount_percent", { precision: 5, scale: 2 }),
-  discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }),
-  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }),
-  aggregateAdjustmentTotal: decimal("aggregate_adjustment_total", { precision: 12, scale: 2 }), // Total of all aggregate adjustments
-  // Tax fields (applied at batch level, not individual services/expenses)
-  taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).default('9.3'), // Tax rate percentage (default 9.3%)
-  taxAmount: decimal("tax_amount", { precision: 10, scale: 2 }), // Calculated tax amount
-  taxAmountOverride: decimal("tax_amount_override", { precision: 10, scale: 2 }), // Manual override for tax amount (bypasses calculation)
-  // GL System integration
-  glInvoiceNumber: text("gl_invoice_number"), // External GL system invoice number (e.g., QuickBooks, NetSuite)
-  invoicingMode: text("invoicing_mode").notNull().default("client"), // "client" or "project"
-  batchType: text("batch_type").notNull().default("mixed"), // "services", "expenses", or "mixed"
-  paymentTerms: text("payment_terms"), // Optional payment terms override for this batch
-  status: text("status").notNull().default("draft"), // draft, reviewed, finalized
-  finalizedAt: timestamp("finalized_at"),
-  finalizedBy: varchar("finalized_by").references(() => users.id),
-  createdBy: varchar("created_by").references(() => users.id), // Track who created the batch
-  // Payment milestone link - one invoice batch per payment milestone
-  projectMilestoneId: varchar("project_milestone_id").references(() => projectMilestones.id), // Now references unified milestones table
-  // Revenue recognition date tracking
-  asOfDate: date("as_of_date"), // Date for revenue recognition (defaults to finalized date)
-  asOfDateUpdatedBy: varchar("as_of_date_updated_by").references(() => users.id),
-  asOfDateUpdatedAt: timestamp("as_of_date_updated_at"),
-  notes: text("notes"), // For review comments
-  exportedToQBO: boolean("exported_to_qbo").notNull().default(false),
-  exportedAt: timestamp("exported_at"),
-  // Invoice PDF storage
-  pdfFileId: text("pdf_file_id"), // Object Storage file ID or local filesystem path
-  // Payment tracking
-  paymentStatus: text("payment_status").notNull().default("unpaid"), // unpaid, partial, paid
-  paymentDate: date("payment_date"), // Date payment was received
-  paymentAmount: decimal("payment_amount", { precision: 10, scale: 2 }), // Amount paid (for partial payments)
-  paymentNotes: text("payment_notes"), // Notes about payment
-  paymentUpdatedBy: varchar("payment_updated_by").references(() => users.id), // Who updated payment status
-  paymentUpdatedAt: timestamp("payment_updated_at"), // When payment status was updated
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_invoice_batches_tenant").on(table.tenantId),
-}));
-
-// Invoice lines
-export const invoiceLines = pgTable("invoice_lines", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  batchId: text("batch_id").notNull().references(() => invoiceBatches.batchId),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  clientId: varchar("client_id").notNull().references(() => clients.id), // Track client for grouping
-  type: text("type").notNull(), // time, expense, milestone, discount, no-charge
-  quantity: decimal("quantity", { precision: 10, scale: 2 }),
-  rate: decimal("rate", { precision: 10, scale: 2 }),
-  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  description: text("description"),
-  // Adjustment tracking fields
-  originalAmount: decimal("original_amount", { precision: 12, scale: 2 }), // Original calculated amount before adjustments
-  billedAmount: decimal("billed_amount", { precision: 12, scale: 2 }), // Final amount being billed to client
-  varianceAmount: decimal("variance_amount", { precision: 12, scale: 2 }), // Difference between original and billed
-  originalRate: decimal("original_rate", { precision: 12, scale: 2 }), // Original rate before adjustment
-  originalQuantity: decimal("original_quantity", { precision: 12, scale: 2 }), // Original quantity before adjustment
-  adjustmentType: text("adjustment_type"), // 'line' | 'aggregate' | null
-  adjustmentReason: text("adjustment_reason"), // Why the adjustment was made
-  editedBy: varchar("edited_by").references(() => users.id), // Who made the adjustment
-  editedAt: timestamp("edited_at"), // When the adjustment was made
-  projectMilestoneId: varchar("project_milestone_id").references(() => projectMilestones.id), // Link to milestone
-  isAdjustment: boolean("is_adjustment").notNull().default(false), // Flag for adjustment lines vs generated lines
-  allocationGroupId: varchar("allocation_group_id"), // Groups related adjustment lines
-  sowId: varchar("sow_id").references(() => sows.id), // Reference to SOW if applicable
-  taxable: boolean("taxable").notNull().default(true), // Whether this line is subject to tax (expenses default to false)
-  expenseCategory: text("expense_category"), // Category for expense lines (e.g., "Per Diem", "Hotel", "Travel"); null for service lines
-  originalCurrency: text("original_currency"), // Original currency of expense (USD, CAD, EUR, GBP)
-  originalCurrencyAmount: decimal("original_currency_amount", { precision: 12, scale: 2 }), // Amount in original currency
-  exchangeRate: decimal("exchange_rate", { precision: 12, scale: 6 }), // Exchange rate used for conversion
-  sourceExpenseId: varchar("source_expense_id").references(() => expenses.id), // Link back to source expense for traceability
-  sourceTimeEntryId: varchar("source_time_entry_id").references(() => timeEntries.id), // Link back to source time entry for traceability
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-// Invoice adjustments
-export const invoiceAdjustments = pgTable("invoice_adjustments", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  batchId: text("batch_id").notNull().references(() => invoiceBatches.batchId),
-  scope: text("scope").notNull(), // 'line' | 'aggregate'
-  method: text("method").notNull(), // 'pro_rata_amount' | 'pro_rata_hours' | 'flat' | 'manual'
-  targetAmount: decimal("target_amount", { precision: 12, scale: 2 }),
-  reason: text("reason"),
-  createdBy: varchar("created_by").notNull().references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  metadata: jsonb("metadata"), // For storing allocation details
-  sowId: varchar("sow_id").references(() => sows.id),
-  projectId: varchar("project_id").references(() => projects.id)
-});
-
-// Relations
-export const usersRelations = relations(users, ({ many }) => ({
-  timeEntries: many(timeEntries),
-  expenses: many(expenses),
-  allocations: many(estimateAllocations),
-  projectRateOverrides: many(projectRateOverrides),
-}));
-
-export const clientsRelations = relations(clients, ({ many }) => ({
-  projects: many(projects),
-}));
-
-export const projectsRelations = relations(projects, ({ one, many }) => ({
-  client: one(clients, {
-    fields: [projects.clientId],
-    references: [clients.id],
-  }),
-  pm: one(users, {
-    fields: [projects.pm],
-    references: [users.id],
-  }),
-  estimates: many(estimates),
-  timeEntries: many(timeEntries),
-  expenses: many(expenses),
-  changeOrders: many(changeOrders),
-  invoiceLines: many(invoiceLines),
-  epics: many(projectEpics),
-  workstreams: many(projectWorkstreams),
-  rateOverrides: many(projectRateOverrides),
-  engagements: many(projectEngagements),
-}));
-
-export const projectEngagementsRelations = relations(projectEngagements, ({ one }) => ({
-  project: one(projects, {
-    fields: [projectEngagements.projectId],
-    references: [projects.id],
-  }),
-  user: one(users, {
-    fields: [projectEngagements.userId],
-    references: [users.id],
-  }),
-  completedByUser: one(users, {
-    fields: [projectEngagements.completedBy],
-    references: [users.id],
-  }),
-}));
-
-export const estimatesRelations = relations(estimates, ({ one, many }) => ({
-  project: one(projects, {
-    fields: [estimates.projectId],
-    references: [projects.id],
-  }),
-  client: one(clients, {
-    fields: [estimates.clientId],
-    references: [clients.id],
-  }),
-  channel: one(estimateChannels, {
-    fields: [estimates.id],
-    references: [estimateChannels.estimateId],
-  }),
-  epics: many(estimateEpics),
-  lineItems: many(estimateLineItems),
-  rateOverrides: many(estimateRateOverrides),
-}));
-
-export const estimateChannelsRelations = relations(estimateChannels, ({ one }) => ({
-  estimate: one(estimates, {
-    fields: [estimateChannels.estimateId],
-    references: [estimates.id],
-  }),
-}));
-
-export const estimateLineItemsRelations = relations(estimateLineItems, ({ one }) => ({
-  estimate: one(estimates, {
-    fields: [estimateLineItems.estimateId],
-    references: [estimates.id],
-  }),
-  epic: one(estimateEpics, {
-    fields: [estimateLineItems.epicId],
-    references: [estimateEpics.id],
-  }),
-  stage: one(estimateStages, {
-    fields: [estimateLineItems.stageId],
-    references: [estimateStages.id],
-  }),
-}));
-
-export const estimateRateOverridesRelations = relations(estimateRateOverrides, ({ one }) => ({
-  estimate: one(estimates, {
-    fields: [estimateRateOverrides.estimateId],
-    references: [estimates.id],
-  }),
-  createdByUser: one(users, {
-    fields: [estimateRateOverrides.createdBy],
-    references: [users.id],
-  }),
-}));
-
-export const estimateEpicsRelations = relations(estimateEpics, ({ one, many }) => ({
-  estimate: one(estimates, {
-    fields: [estimateEpics.estimateId],
-    references: [estimates.id],
-  }),
-  stages: many(estimateStages),
-}));
-
-export const estimateStagesRelations = relations(estimateStages, ({ one, many }) => ({
-  epic: one(estimateEpics, {
-    fields: [estimateStages.epicId],
-    references: [estimateEpics.id],
-  }),
-  activities: many(estimateActivities),
-}));
-
-export const estimateActivitiesRelations = relations(estimateActivities, ({ one, many }) => ({
-  stage: one(estimateStages, {
-    fields: [estimateActivities.stageId],
-    references: [estimateStages.id],
-  }),
-  allocations: many(estimateAllocations),
-}));
-
-// Project structure relations
-export const projectEpicsRelations = relations(projectEpics, ({ one, many }) => ({
-  project: one(projects, {
-    fields: [projectEpics.projectId],
-    references: [projects.id],
-  }),
-  estimateEpic: one(estimateEpics, {
-    fields: [projectEpics.estimateEpicId],
-    references: [estimateEpics.id],
-  }),
-  stages: many(projectStages),
-  milestones: many(projectMilestones),
-}));
-
-export const projectStagesRelations = relations(projectStages, ({ one, many }) => ({
-  epic: one(projectEpics, {
-    fields: [projectStages.epicId],
-    references: [projectEpics.id],
-  }),
-  activities: many(projectActivities),
-}));
-
-export const projectActivitiesRelations = relations(projectActivities, ({ one }) => ({
-  stage: one(projectStages, {
-    fields: [projectActivities.stageId],
-    references: [projectStages.id],
-  }),
-}));
-
-export const projectWorkstreamsRelations = relations(projectWorkstreams, ({ one }) => ({
-  project: one(projects, {
-    fields: [projectWorkstreams.projectId],
-    references: [projects.id],
-  }),
-}));
-
-export const projectMilestonesRelations = relations(projectMilestones, ({ one }) => ({
-  projectEpic: one(projectEpics, {
-    fields: [projectMilestones.projectEpicId],
-    references: [projectEpics.id],
-  }),
-  estimateStage: one(estimateStages, {
-    fields: [projectMilestones.estimateStageId],
-    references: [estimateStages.id],
-  }),
-}));
-
-export const projectRateOverridesRelations = relations(projectRateOverrides, ({ one }) => ({
-  project: one(projects, {
-    fields: [projectRateOverrides.projectId],
-    references: [projects.id],
-  }),
-  user: one(users, {
-    fields: [projectRateOverrides.userId],
-    references: [users.id],
-  }),
-}));
-
-export const rolesRelations = relations(roles, ({ many }) => ({
-  allocations: many(estimateAllocations),
-}));
-
-export const timeEntriesRelations = relations(timeEntries, ({ one }) => ({
-  person: one(users, {
-    fields: [timeEntries.personId],
-    references: [users.id],
-  }),
-  project: one(projects, {
-    fields: [timeEntries.projectId],
-    references: [projects.id],
-  }),
-}));
-
-export const expensesRelations = relations(expenses, ({ one, many }) => ({
-  person: one(users, {
-    fields: [expenses.personId],
-    references: [users.id],
-  }),
-  project: one(projects, {
-    fields: [expenses.projectId],
-    references: [projects.id],
-  }),
-  attachments: many(expenseAttachments),
-  reportItems: many(expenseReportItems),
-  approver: one(users, {
-    fields: [expenses.approvedBy],
-    references: [users.id],
-    relationName: "expenseApprovals",
-  }),
-  rejecter: one(users, {
-    fields: [expenses.rejectedBy],
-    references: [users.id],
-    relationName: "expenseRejections",
-  }),
-}));
-
-export const expenseAttachmentsRelations = relations(expenseAttachments, ({ one }) => ({
-  expense: one(expenses, {
-    fields: [expenseAttachments.expenseId],
-    references: [expenses.id],
-  }),
-  createdByUser: one(users, {
-    fields: [expenseAttachments.createdByUserId],
-    references: [users.id],
-  }),
-}));
-
-export const expenseReportsRelations = relations(expenseReports, ({ one, many }) => ({
-  submitter: one(users, {
-    fields: [expenseReports.submitterId],
-    references: [users.id],
-  }),
-  approver: one(users, {
-    fields: [expenseReports.approvedBy],
-    references: [users.id],
-    relationName: "expenseReportApprovals",
-  }),
-  rejecter: one(users, {
-    fields: [expenseReports.rejectedBy],
-    references: [users.id],
-    relationName: "expenseReportRejections",
-  }),
-  items: many(expenseReportItems),
-}));
-
-export const expenseReportItemsRelations = relations(expenseReportItems, ({ one }) => ({
-  report: one(expenseReports, {
-    fields: [expenseReportItems.reportId],
-    references: [expenseReports.id],
-  }),
-  expense: one(expenses, {
-    fields: [expenseReportItems.expenseId],
-    references: [expenses.id],
-  }),
-}));
-
-export const reimbursementBatchesRelations = relations(reimbursementBatches, ({ one, many }) => ({
-  approver: one(users, {
-    fields: [reimbursementBatches.approvedBy],
-    references: [users.id],
-    relationName: "reimbursementBatchApprovals",
-  }),
-  processor: one(users, {
-    fields: [reimbursementBatches.processedBy],
-    references: [users.id],
-    relationName: "reimbursementBatchProcessors",
-  }),
-  requester: one(users, {
-    fields: [reimbursementBatches.requestedBy],
-    references: [users.id],
-    relationName: "reimbursementBatchRequesters",
-  }),
-  requestedForUser: one(users, {
-    fields: [reimbursementBatches.requestedForUserId],
-    references: [users.id],
-    relationName: "reimbursementBatchRecipients",
-  }),
-  lineItems: many(reimbursementLineItems),
-}));
-
-export const reimbursementLineItemsRelations = relations(reimbursementLineItems, ({ one }) => ({
-  batch: one(reimbursementBatches, {
-    fields: [reimbursementLineItems.batchId],
-    references: [reimbursementBatches.id],
-  }),
-  expense: one(expenses, {
-    fields: [reimbursementLineItems.expenseId],
-    references: [expenses.id],
-  }),
-  reviewer: one(users, {
-    fields: [reimbursementLineItems.reviewedBy],
-    references: [users.id],
-  }),
-}));
-
-export const pendingReceiptsRelations = relations(pendingReceipts, ({ one }) => ({
-  project: one(projects, {
-    fields: [pendingReceipts.projectId],
-    references: [projects.id],
-  }),
-  uploadedByUser: one(users, {
-    fields: [pendingReceipts.uploadedBy],
-    references: [users.id],
-  }),
-  assignedByUser: one(users, {
-    fields: [pendingReceipts.assignedBy],
-    references: [users.id],
-  }),
-  expense: one(expenses, {
-    fields: [pendingReceipts.expenseId],
-    references: [expenses.id],
-  }),
-}));
-
-export const estimateAllocationsRelations = relations(estimateAllocations, ({ one }) => ({
-  activity: one(estimateActivities, {
-    fields: [estimateAllocations.activityId],
-    references: [estimateActivities.id],
-  }),
-  role: one(roles, {
-    fields: [estimateAllocations.roleId],
-    references: [roles.id],
-  }),
-  person: one(users, {
-    fields: [estimateAllocations.personId],
-    references: [users.id],
-  }),
-}));
-
-export const invoiceBatchesRelations = relations(invoiceBatches, ({ many, one }) => ({
-  lines: many(invoiceLines),
-  adjustments: many(invoiceAdjustments),
-  finalizer: one(users, {
-    fields: [invoiceBatches.finalizedBy],
-    references: [users.id],
-  }),
-  creator: one(users, {
-    fields: [invoiceBatches.createdBy],
-    references: [users.id],
-  }),
-}));
-
-export const invoiceLinesRelations = relations(invoiceLines, ({ one }) => ({
-  batch: one(invoiceBatches, {
-    fields: [invoiceLines.batchId],
-    references: [invoiceBatches.batchId],
-  }),
-  project: one(projects, {
-    fields: [invoiceLines.projectId],
-    references: [projects.id],
-  }),
-  client: one(clients, {
-    fields: [invoiceLines.clientId],
-    references: [clients.id],
-  }),
-  editor: one(users, {
-    fields: [invoiceLines.editedBy],
-    references: [users.id],
-  }),
-  milestone: one(projectMilestones, {
-    fields: [invoiceLines.projectMilestoneId],
-    references: [projectMilestones.id],
-  }),
-  sow: one(sows, {
-    fields: [invoiceLines.sowId],
-    references: [sows.id],
-  }),
-  sourceExpense: one(expenses, {
-    fields: [invoiceLines.sourceExpenseId],
-    references: [expenses.id],
-  }),
-  sourceTimeEntry: one(timeEntries, {
-    fields: [invoiceLines.sourceTimeEntryId],
-    references: [timeEntries.id],
-  }),
-}));
-
-export const invoiceAdjustmentsRelations = relations(invoiceAdjustments, ({ one }) => ({
-  batch: one(invoiceBatches, {
-    fields: [invoiceAdjustments.batchId],
-    references: [invoiceBatches.batchId],
-  }),
-  creator: one(users, {
-    fields: [invoiceAdjustments.createdBy],
-    references: [users.id],
-  }),
-  project: one(projects, {
-    fields: [invoiceAdjustments.projectId],
-    references: [projects.id],
-  }),
-  sow: one(sows, {
-    fields: [invoiceAdjustments.sowId],
-    references: [sows.id],
-  }),
-}));
-
-// ============================================================================
-// Insert Schemas - Multi-Tenancy Tables
-// ============================================================================
-
-export const insertServicePlanSchema = createInsertSchema(servicePlans).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTenantSchema = createInsertSchema(tenants).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertBlockedDomainSchema = createInsertSchema(blockedDomains).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTenantUserSchema = createInsertSchema(tenantUsers).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertConsultantAccessSchema = createInsertSchema(consultantAccess).omit({
-  id: true,
-  createdAt: true,
-  grantedAt: true,
-});
-
-// ============================================================================
-// Insert Schemas - Core Tables
-// ============================================================================
-
-export const insertUserSchema = createInsertSchema(users).omit({
-  id: true,
-  createdAt: true,
-}).extend({
-  email: z.string().email().optional().nullable(), // Email is now optional
-});
-
-export const insertClientSchema = createInsertSchema(clients).omit({
-  id: true,
-  createdAt: true,
-}).extend({
-  status: z.enum(["pending", "active", "inactive", "archived"]).default("pending"),
-  msaDate: z.string().nullish(), // Date input as string or null
-  sinceDate: z.string().nullish(), // Date input as string or null
-  msaDocument: z.string().optional(), // File path/name
-  hasMsa: z.boolean().default(false),
-  ndaDate: z.string().nullish(), // Date input as string or null
-  ndaDocument: z.string().optional(), // File path/name
-  hasNda: z.boolean().default(false)
-});
-
-export const insertProjectSchema = createInsertSchema(projects).omit({
-  id: true,
-  createdAt: true,
-});
-
-// Project structure insert schemas
-export const insertProjectEpicSchema = createInsertSchema(projectEpics).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertProjectStageSchema = createInsertSchema(projectStages).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertProjectActivitySchema = createInsertSchema(projectActivities).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertProjectWorkstreamSchema = createInsertSchema(projectWorkstreams).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertProjectMilestoneSchema = createInsertSchema(projectMilestones).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  actualHours: true,
-  completedDate: true,
-});
-
-export const insertProjectAllocationSchema = createInsertSchema(projectAllocations).omit({
-  id: true,
-  createdAt: true,
-}).extend({
-  hours: z.union([z.string(), z.number()]).transform(val => String(val)),
-  rackRate: z.union([z.string(), z.number()]).transform(val => String(val)),
-});
-
-export const insertProjectBaselineSchema = createInsertSchema(projectBaselines).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertProjectEngagementSchema = createInsertSchema(projectEngagements).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertUserRoleCapabilitySchema = createInsertSchema(userRoleCapabilities).omit({
-  id: true,
-  createdAt: true,
-}).extend({
-  proficiencyLevel: z.enum(["primary", "secondary", "learning"]).default("primary"),
-});
-
-export const insertUserRateScheduleSchema = createInsertSchema(userRateSchedules).omit({
-  id: true,
-  createdAt: true,
-  createdBy: true,
-});
-
-export const insertProjectRateOverrideSchema = createInsertSchema(projectRateOverrides).omit({
-  id: true,
-  createdAt: true,
-  effectiveStart: true, // Will use default
-}).extend({
-  effectiveStart: z.string().optional(), // Allow optional, will default to today
-});
-
-export const insertRoleSchema = createInsertSchema(roles).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertVocabularyCatalogSchema = createInsertSchema(vocabularyCatalog).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertOrganizationVocabularySchema = createInsertSchema(organizationVocabulary).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-// Vocabulary selection update schema with validation
-export const updateOrganizationVocabularySchema = z.object({
-  epicTermId: z.string().uuid().optional().nullable(),
-  stageTermId: z.string().uuid().optional().nullable(),
-  activityTermId: z.string().uuid().optional().nullable(),
-  workstreamTermId: z.string().uuid().optional().nullable(),
-  milestoneTermId: z.string().uuid().optional().nullable(),
-}).strict();
-
-export const insertEstimateSchema = createInsertSchema(estimates).omit({
-  id: true,
-  createdAt: true,
-}).extend({
-  status: estimateStatusEnum.optional(), // Validate status using enum
-});
-
-export const insertEstimateLineItemSchema = createInsertSchema(estimateLineItems).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertClientRateOverrideSchema = createInsertSchema(clientRateOverrides)
-  .omit({
-    id: true,
-    createdAt: true,
-  })
-  .extend({
-    subjectType: z.enum(['role', 'person']), // Validate subject type
-  });
-
-export const insertEstimateRateOverrideSchema = createInsertSchema(estimateRateOverrides)
-  .omit({
-    id: true,
-    createdAt: true,
-  })
-  .extend({
-    subjectType: z.enum(['role', 'person']), // Validate subject type
-    effectiveStart: z.string().min(1, "Effective start date is required"), // Explicitly require date string
-  });
-
-export const insertEstimateMilestoneSchema = createInsertSchema(estimateMilestones).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertEstimateShareSchema = createInsertSchema(estimateShares).omit({
-  id: true,
-  grantedAt: true,
-});
-
-export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({
-  id: true,
-  createdAt: true,
-  billingRate: true,  // Calculated server-side
-  costRate: true,     // Calculated server-side
-}).extend({
-  // Ensure projectId is a non-empty string (required for foreign key)
-  projectId: z.string().trim().min(1, "Project is required"),
-  // Ensure personId is a non-empty string (required for foreign key)
-  personId: z.string().trim().min(1, "Person is required")
-});
-
-export const insertExpenseSchema = createInsertSchema(expenses).omit({
-  id: true,
-  createdAt: true,
-  submittedAt: true,
-  approvedAt: true,
-  approvedBy: true,
-  rejectedAt: true,
-  rejectedBy: true,
-  reimbursedAt: true,
-  reimbursementBatchId: true,
-  clientPaidAt: true,
-});
-
-export const insertExpenseAttachmentSchema = createInsertSchema(expenseAttachments).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertPendingReceiptSchema = createInsertSchema(pendingReceipts).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertExpenseReportSchema = createInsertSchema(expenseReports).omit({
-  id: true,
-  reportNumber: true, // Auto-generated in storage layer
-  totalAmount: true, // Calculated from expenses
-  createdAt: true,
-  updatedAt: true,
-  submittedAt: true,
-  approvedAt: true,
-  approvedBy: true,
-  rejectedAt: true,
-  rejectedBy: true,
-});
-
-export const insertExpenseReportItemSchema = createInsertSchema(expenseReportItems).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertReimbursementBatchSchema = createInsertSchema(reimbursementBatches).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  approvedAt: true,
-  approvedBy: true,
-  processedAt: true,
-  processedBy: true,
-});
-
-export const insertReimbursementLineItemSchema = createInsertSchema(reimbursementLineItems).omit({
-  id: true,
-  createdAt: true,
-  reviewedAt: true,
-  reviewedBy: true,
-});
-
-export const insertContractorInvoiceSchema = createInsertSchema(contractorInvoices).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  approvedAt: true,
-  approvedBy: true,
-  paidAt: true,
-  paidBy: true,
-  submittedAt: true,
-});
-
-export const insertSowSchema = createInsertSchema(sows).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  approvedBy: true,
-  approvedAt: true,
-});
-
-export const insertChangeOrderSchema = createInsertSchema(changeOrders).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertProjectBudgetHistorySchema = createInsertSchema(projectBudgetHistory).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertAirportCodeSchema = createInsertSchema(airportCodes).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertOconusPerDiemRateSchema = createInsertSchema(oconusPerDiemRates).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-// Types
-// ============================================================================
-// Types - Multi-Tenancy Tables
-// ============================================================================
-
-export type ServicePlan = typeof servicePlans.$inferSelect;
-export type InsertServicePlan = z.infer<typeof insertServicePlanSchema>;
-
-export type Tenant = typeof tenants.$inferSelect;
-export type InsertTenant = z.infer<typeof insertTenantSchema>;
-
-export type BlockedDomain = typeof blockedDomains.$inferSelect;
-export type InsertBlockedDomain = z.infer<typeof insertBlockedDomainSchema>;
-
-export type TenantUser = typeof tenantUsers.$inferSelect;
+export const insertTenantUserSchema = createInsertSchema(tenantUsers).omit({ id: true, createdAt: true });
 export type InsertTenantUser = z.infer<typeof insertTenantUserSchema>;
-
-export type ConsultantAccess = typeof consultantAccess.$inferSelect;
-export type InsertConsultantAccess = z.infer<typeof insertConsultantAccessSchema>;
+export type TenantUser = typeof tenantUsers.$inferSelect;
 
 // ============================================================================
-// Types - Core Tables
+// SESSIONS
 // ============================================================================
 
-export type User = typeof users.$inferSelect;
-export type InsertUser = z.infer<typeof insertUserSchema>;
-
-export type Client = typeof clients.$inferSelect;
-export type InsertClient = z.infer<typeof insertClientSchema>;
-
-export type Project = typeof projects.$inferSelect;
-export type InsertProject = z.infer<typeof insertProjectSchema>;
-
-export type Role = typeof roles.$inferSelect;
-export type InsertRole = z.infer<typeof insertRoleSchema>;
-
-export type SystemSetting = typeof systemSettings.$inferSelect;
-export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
-
-export type AirportCode = typeof airportCodes.$inferSelect;
-export type InsertAirportCode = z.infer<typeof insertAirportCodeSchema>;
-
-export type OconusPerDiemRate = typeof oconusPerDiemRates.$inferSelect;
-export type InsertOconusPerDiemRate = z.infer<typeof insertOconusPerDiemRateSchema>;
-
-export type VocabularyCatalog = typeof vocabularyCatalog.$inferSelect;
-export type InsertVocabularyCatalog = z.infer<typeof insertVocabularyCatalogSchema>;
-
-export type OrganizationVocabulary = typeof organizationVocabulary.$inferSelect;
-export type InsertOrganizationVocabulary = z.infer<typeof insertOrganizationVocabularySchema>;
-
-export type Estimate = typeof estimates.$inferSelect;
-export type InsertEstimate = z.infer<typeof insertEstimateSchema>;
-
-export type EstimateLineItem = typeof estimateLineItems.$inferSelect;
-export type InsertEstimateLineItem = z.infer<typeof insertEstimateLineItemSchema>;
-
-export type EstimateLineItemWithJoins = EstimateLineItem & {
-  assignedUser: User | null;
-  role: Role | null;
-};
-
-export type ClientRateOverride = typeof clientRateOverrides.$inferSelect;
-export type InsertClientRateOverride = z.infer<typeof insertClientRateOverrideSchema>;
-
-export type EstimateRateOverride = typeof estimateRateOverrides.$inferSelect;
-export type InsertEstimateRateOverride = z.infer<typeof insertEstimateRateOverrideSchema>;
-
-export type EstimateMilestone = typeof estimateMilestones.$inferSelect;
-export type InsertEstimateMilestone = z.infer<typeof insertEstimateMilestoneSchema>;
-
-export type EstimateShare = typeof estimateShares.$inferSelect;
-export type InsertEstimateShare = z.infer<typeof insertEstimateShareSchema>;
-
-export type EstimateEpic = typeof estimateEpics.$inferSelect;
-export type EstimateStage = typeof estimateStages.$inferSelect;
-export type EstimateActivity = typeof estimateActivities.$inferSelect;
-export type EstimateAllocation = typeof estimateAllocations.$inferSelect;
-
-export type ProjectEpic = typeof projectEpics.$inferSelect;
-export type InsertProjectEpic = z.infer<typeof insertProjectEpicSchema>;
-export type ProjectStage = typeof projectStages.$inferSelect;
-export type InsertProjectStage = z.infer<typeof insertProjectStageSchema>;
-export type ProjectActivity = typeof projectActivities.$inferSelect;
-export type InsertProjectActivity = z.infer<typeof insertProjectActivitySchema>;
-export type ProjectWorkstream = typeof projectWorkstreams.$inferSelect;
-export type InsertProjectWorkstream = z.infer<typeof insertProjectWorkstreamSchema>;
-export type ProjectMilestone = typeof projectMilestones.$inferSelect;
-export type InsertProjectMilestone = z.infer<typeof insertProjectMilestoneSchema>;
-export type ProjectAllocation = typeof projectAllocations.$inferSelect;
-export type InsertProjectAllocation = z.infer<typeof insertProjectAllocationSchema>;
-export type ProjectBaseline = typeof projectBaselines.$inferSelect;
-export type InsertProjectBaseline = z.infer<typeof insertProjectBaselineSchema>;
-export type ProjectEngagement = typeof projectEngagements.$inferSelect;
-export type InsertProjectEngagement = z.infer<typeof insertProjectEngagementSchema>;
-export type ProjectRateOverride = typeof projectRateOverrides.$inferSelect;
-export type InsertProjectRateOverride = z.infer<typeof insertProjectRateOverrideSchema>;
-export type UserRateSchedule = typeof userRateSchedules.$inferSelect;
-export type InsertUserRateSchedule = z.infer<typeof insertUserRateScheduleSchema>;
-export type UserRoleCapability = typeof userRoleCapabilities.$inferSelect;
-export type InsertUserRoleCapability = z.infer<typeof insertUserRoleCapabilitySchema>;
-
-export type TimeEntry = typeof timeEntries.$inferSelect;
-export type InsertTimeEntry = z.infer<typeof insertTimeEntrySchema>;
-
-export type Expense = typeof expenses.$inferSelect;
-export type InsertExpense = z.infer<typeof insertExpenseSchema>;
-
-export type ExpenseAttachment = typeof expenseAttachments.$inferSelect;
-export type InsertExpenseAttachment = z.infer<typeof insertExpenseAttachmentSchema>;
-
-export type PendingReceipt = typeof pendingReceipts.$inferSelect;
-export type InsertPendingReceipt = z.infer<typeof insertPendingReceiptSchema>;
-
-export type ExpenseReport = typeof expenseReports.$inferSelect;
-export type InsertExpenseReport = z.infer<typeof insertExpenseReportSchema>;
-
-export type ExpenseReportItem = typeof expenseReportItems.$inferSelect;
-export type InsertExpenseReportItem = z.infer<typeof insertExpenseReportItemSchema>;
-
-export type ReimbursementBatch = typeof reimbursementBatches.$inferSelect;
-export type InsertReimbursementBatch = z.infer<typeof insertReimbursementBatchSchema>;
-
-export type ReimbursementLineItem = typeof reimbursementLineItems.$inferSelect;
-export type InsertReimbursementLineItem = z.infer<typeof insertReimbursementLineItemSchema>;
-
-export type ContractorInvoice = typeof contractorInvoices.$inferSelect;
-export type InsertContractorInvoice = z.infer<typeof insertContractorInvoiceSchema>;
-
-export type ChangeOrder = typeof changeOrders.$inferSelect;
-export type InsertChangeOrder = z.infer<typeof insertChangeOrderSchema>;
-
-export type Sow = typeof sows.$inferSelect;
-export type InsertSow = z.infer<typeof insertSowSchema>;
-
-export type ProjectBudgetHistory = typeof projectBudgetHistory.$inferSelect;
-export type InsertProjectBudgetHistory = z.infer<typeof insertProjectBudgetHistorySchema>;
-
-export type InvoiceBatch = typeof invoiceBatches.$inferSelect;
-export type InvoiceLine = typeof invoiceLines.$inferSelect;
-export type InvoiceAdjustment = typeof invoiceAdjustments.$inferSelect;
-export type RateOverride = typeof rateOverrides.$inferSelect;
-
-// Invoice schemas
-export const insertInvoiceBatchSchema = createInsertSchema(invoiceBatches).omit({
-  id: true,
-  createdAt: true
-});
-export type InsertInvoiceBatch = z.infer<typeof insertInvoiceBatchSchema>;
-
-// Payment status update schema
-export const updateInvoicePaymentSchema = z.object({
-  paymentStatus: z.enum(["unpaid", "partial", "paid"]),
-  paymentDate: z.string().optional(),
-  paymentAmount: z.string().optional(), // Decimal as string
-  paymentNotes: z.string().optional(),
-});
-export type UpdateInvoicePayment = z.infer<typeof updateInvoicePaymentSchema>;
-
-export const insertInvoiceLineSchema = createInsertSchema(invoiceLines).omit({
-  id: true,
-  createdAt: true,
-  editedAt: true,
-  varianceAmount: true, // Calculated field
-});
-export type InsertInvoiceLine = z.infer<typeof insertInvoiceLineSchema>;
-
-export const insertInvoiceAdjustmentSchema = createInsertSchema(invoiceAdjustments).omit({
-  id: true,
-  createdAt: true
-});
-export type InsertInvoiceAdjustment = z.infer<typeof insertInvoiceAdjustmentSchema>;
-
-// Billing API Response Types
-// SharePoint Embedded Container Management
-export const containerTypes = pgTable("container_types", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  containerTypeId: text("container_type_id").notNull().unique(), // SharePoint Container Type ID
-  displayName: text("display_name").notNull(),
-  description: text("description"),
-  applicationId: text("application_id"), // Azure AD Application ID that owns this container type
-  isBuiltIn: boolean("is_built_in").notNull().default(false),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-export const clientContainers = pgTable("client_containers", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  clientId: varchar("client_id").notNull().references(() => clients.id),
-  containerId: text("container_id").notNull().unique(), // SharePoint Container ID
-  containerTypeId: text("container_type_id").notNull().references(() => containerTypes.containerTypeId),
-  displayName: text("display_name").notNull(),
-  description: text("description"),
-  driveId: text("drive_id"), // Associated drive ID for backward compatibility
-  webUrl: text("web_url"), // SharePoint web URL
-  status: text("status").notNull().default("active"), // active, inactive
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  // Unique constraint: one active container per client/type combination
-  uniqueClientContainerType: sql`UNIQUE (${table.clientId}, ${table.containerTypeId}) WHERE ${table.status} = 'active'`
-}));
-
-export const containerPermissions = pgTable("container_permissions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  containerId: text("container_id").notNull().references(() => clientContainers.containerId),
-  userId: varchar("user_id").references(() => users.id), // Optional - for user-specific permissions
-  principalType: text("principal_type").notNull(), // user, application, group
-  principalId: text("principal_id").notNull(), // Azure AD principal ID
-  roles: text("roles").array().notNull(), // SharePoint roles: reader, writer, owner, etc.
-  grantedAt: timestamp("granted_at").notNull().default(sql`now()`),
-  grantedBy: varchar("granted_by").references(() => users.id),
-});
-
-// Container Metadata Column Definitions
-export const containerColumns = pgTable("container_columns", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  containerId: text("container_id").notNull().references(() => clientContainers.containerId),
-  columnId: text("column_id").notNull(), // SharePoint column ID from Graph API
-  name: text("name").notNull(), // Internal column name (Title, ProjectId, etc.)
-  displayName: text("display_name").notNull(), // User-friendly display name
-  description: text("description"),
-  columnType: text("column_type").notNull(), // text, choice, dateTime, number, currency, boolean, personOrGroup
-  isRequired: boolean("is_required").notNull().default(false),
-  isIndexed: boolean("is_indexed").notNull().default(false),
-  isHidden: boolean("is_hidden").notNull().default(false),
-  isReadOnly: boolean("is_read_only").notNull().default(false),
-  // Column type-specific configuration stored as JSON
-  textConfig: jsonb("text_config"), // { maxLength: 255, allowMultipleLines: false, etc. }
-  choiceConfig: jsonb("choice_config"), // { choices: ["option1", "option2"], allowFillInChoice: false }
-  numberConfig: jsonb("number_config"), // { decimalPlaces: 2, min: 0, max: 999999 }
-  dateTimeConfig: jsonb("date_time_config"), // { displayAs: "DateTime", includeTime: true }
-  currencyConfig: jsonb("currency_config"), // { lcid: 1033 } - locale identifier
-  booleanConfig: jsonb("boolean_config"), // Not used currently but for future extensibility
-  // Validation rules
-  validationRules: jsonb("validation_rules"), // Custom validation rules
-  // Metadata for receipt workflow
-  isReceiptMetadata: boolean("is_receipt_metadata").notNull().default(false), // Flag for receipt-specific columns
-  receiptFieldType: text("receipt_field_type"), // "project_id", "expense_id", "amount", "status", etc.
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  // Unique constraint: one column name per container
-  uniqueContainerColumn: sql`UNIQUE (${table.containerId}, ${table.name})`
-}));
-
-// Receipt Metadata Templates (predefined schemas for different content types)
-export const metadataTemplates = pgTable("metadata_templates", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull().unique(), // "receipt", "invoice", "contract", etc.
-  displayName: text("display_name").notNull(),
-  description: text("description"),
-  contentType: text("content_type").notNull(), // MIME type or general category
-  columnDefinitions: jsonb("column_definitions").notNull(), // Array of column configurations
-  isBuiltIn: boolean("is_built_in").notNull().default(true),
-  isActive: boolean("is_active").notNull().default(true),
-  version: integer("version").notNull().default(1),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-// Document Metadata Tracking (for caching and query optimization)
-export const documentMetadata = pgTable("document_metadata", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  containerId: text("container_id").notNull().references(() => clientContainers.containerId),
-  itemId: text("item_id").notNull(), // SharePoint item ID
-  fileName: text("file_name").notNull(),
-  projectId: text("project_id").references(() => projects.code), // Links to project
-  expenseId: varchar("expense_id").references(() => expenses.id), // Links to expense when assigned
-  uploadedBy: varchar("uploaded_by").references(() => users.id), // User who uploaded
-  expenseCategory: text("expense_category"), // Expense category
-  receiptDate: timestamp("receipt_date"), // Date from receipt
-  amount: decimal("amount", { precision: 10, scale: 2 }), // Receipt amount
-  currency: text("currency").default("USD"), // Currency code
-  status: text("status").notNull().default("pending"), // pending, assigned, processed
-  vendor: text("vendor"), // Merchant/vendor name
-  description: text("description"), // Receipt description
-  isReimbursable: boolean("is_reimbursable").default(true), // Whether it's reimbursable
-  tags: text("tags").array(), // Additional tags for categorization
-  // Raw metadata from SharePoint (for backup/sync)
-  rawMetadata: jsonb("raw_metadata"), // Complete metadata from SharePoint
-  lastSyncedAt: timestamp("last_synced_at").notNull().default(sql`now()`),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  // Unique constraint: one metadata record per container/item
-  uniqueContainerItem: sql`UNIQUE (${table.containerId}, ${table.itemId})`
-}));
-
-export interface BatchSettings {
-  prefix: string;
-  useSequential: boolean;
-  includeDate: boolean;
-  dateFormat: string;
-  sequencePadding: number;
-  currentSequence?: number;
-}
-
-export interface BatchIdPreviewRequest {
-  startDate: string;
-  endDate: string;
-}
-
-export interface BatchIdPreviewResponse {
-  batchId: string;
-}
-
-export interface UnbilledItemsFilters {
-  personId?: string;
-  projectId?: string;
-  clientId?: string;
-  startDate?: string;
-  endDate?: string;
-}
-
-export interface EnrichedTimeEntry extends TimeEntry {
-  person: User;
-  project: Project & { client: Client };
-  calculatedAmount: number;
-  rateIssues?: string[];
-}
-
-export interface EnrichedExpense extends Expense {
-  person: User;
-  project: Project & { client: Client };
-}
-
-export interface UnbilledItemsResponse {
-  timeEntries: EnrichedTimeEntry[];
-  expenses: EnrichedExpense[];
-  totals: {
-    timeHours: number;
-    timeAmount: number;
-    expenseAmount: number;
-    totalAmount: number;
-  };
-  rateValidation: {
-    entriesWithMissingRates: number;
-    entriesWithNullRates: number;
-    issues: string[];
-  };
-}
-
-// Container Management Types
-export type ContainerType = typeof containerTypes.$inferSelect;
-export type ClientContainer = typeof clientContainers.$inferSelect;
-export type ContainerPermission = typeof containerPermissions.$inferSelect;
-export type ContainerColumn = typeof containerColumns.$inferSelect;
-export type MetadataTemplate = typeof metadataTemplates.$inferSelect;
-export type DocumentMetadata = typeof documentMetadata.$inferSelect;
-
-export type InsertContainerType = typeof containerTypes.$inferInsert;
-export type InsertClientContainer = typeof clientContainers.$inferInsert;
-export type InsertContainerPermission = typeof containerPermissions.$inferInsert;
-export type InsertContainerColumn = typeof containerColumns.$inferInsert;
-export type InsertMetadataTemplate = typeof metadataTemplates.$inferInsert;
-export type InsertDocumentMetadata = typeof documentMetadata.$inferInsert;
-
-// Container Management Zod Schemas
-export const insertContainerTypeSchema = createInsertSchema(containerTypes).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true
-});
-
-export const insertClientContainerSchema = createInsertSchema(clientContainers).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true
-});
-
-export const insertContainerPermissionSchema = createInsertSchema(containerPermissions).omit({
-  id: true,
-  grantedAt: true
-});
-
-export const insertContainerColumnSchema = createInsertSchema(containerColumns).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true
-});
-
-export const insertMetadataTemplateSchema = createInsertSchema(metadataTemplates).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true
-});
-
-export const insertDocumentMetadataSchema = createInsertSchema(documentMetadata).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  lastSyncedAt: true
-});
-
-// Receipt Metadata Column Definitions (predefined schema)
-export interface ReceiptMetadataSchema {
-  projectId: {
-    name: "ProjectId";
-    displayName: "Project ID";
-    columnType: "text";
-    description: "Project code this receipt belongs to";
-    isRequired: true;
-    textConfig: { maxLength: 50; allowMultipleLines: false };
-    receiptFieldType: "project_id";
-  };
-  expenseId: {
-    name: "ExpenseId";
-    displayName: "Expense ID";
-    columnType: "text";
-    description: "Expense ID when assigned to an expense";
-    isRequired: false;
-    textConfig: { maxLength: 50; allowMultipleLines: false };
-    receiptFieldType: "expense_id";
-  };
-  uploadedBy: {
-    name: "UploadedBy";
-    displayName: "Uploaded By";
-    columnType: "text";
-    description: "User who uploaded this receipt";
-    isRequired: true;
-    textConfig: { maxLength: 255; allowMultipleLines: false };
-    receiptFieldType: "uploaded_by";
-  };
-  expenseCategory: {
-    name: "ExpenseCategory";
-    displayName: "Expense Category";
-    columnType: "choice";
-    description: "Type of expense category";
-    isRequired: true;
-    choiceConfig: { 
-      choices: ["Travel", "Meals", "Accommodation", "Equipment", "Supplies", "Software", "Training", "Other"];
-      allowFillInChoice: false;
-    };
-    receiptFieldType: "expense_category";
-  };
-  receiptDate: {
-    name: "ReceiptDate";
-    displayName: "Receipt Date";
-    columnType: "dateTime";
-    description: "Date from the receipt";
-    isRequired: true;
-    dateTimeConfig: { displayAs: "DateTime"; includeTime: false };
-    receiptFieldType: "receipt_date";
-  };
-  amount: {
-    name: "Amount";
-    displayName: "Amount";
-    columnType: "currency";
-    description: "Receipt amount";
-    isRequired: true;
-    currencyConfig: { lcid: 1033 }; // US locale
-    receiptFieldType: "amount";
-  };
-  currency: {
-    name: "Currency";
-    displayName: "Currency";
-    columnType: "choice";
-    description: "Currency of the receipt";
-    isRequired: true;
-    choiceConfig: {
-      choices: ["USD", "EUR", "GBP", "CAD", "AUD", "JPY"];
-      allowFillInChoice: false;
-    };
-    receiptFieldType: "currency";
-  };
-  status: {
-    name: "Status";
-    displayName: "Status";
-    columnType: "choice";
-    description: "Processing status of the receipt";
-    isRequired: true;
-    choiceConfig: {
-      choices: ["pending", "assigned", "processed"];
-      allowFillInChoice: false;
-    };
-    receiptFieldType: "status";
-  };
-  vendor: {
-    name: "Vendor";
-    displayName: "Vendor";
-    columnType: "text";
-    description: "Merchant or vendor name";
-    isRequired: false;
-    textConfig: { maxLength: 255; allowMultipleLines: false };
-    receiptFieldType: "vendor";
-  };
-  description: {
-    name: "Description";
-    displayName: "Description";
-    columnType: "text";
-    description: "Receipt description or notes";
-    isRequired: false;
-    textConfig: { maxLength: 500; allowMultipleLines: true };
-    receiptFieldType: "description";
-  };
-  isReimbursable: {
-    name: "IsReimbursable";
-    displayName: "Reimbursable";
-    columnType: "boolean";
-    description: "Whether this receipt is reimbursable";
-    isRequired: false;
-    booleanConfig: {};
-    receiptFieldType: "is_reimbursable";
-  };
-  tags: {
-    name: "Tags";
-    displayName: "Tags";
-    columnType: "text";
-    description: "Additional tags for categorization";
-    isRequired: false;
-    textConfig: { maxLength: 500; allowMultipleLines: false };
-    receiptFieldType: "tags";
-  };
-}
-
-// ============================================
-// Vocabulary System Types
-// ============================================
-
-// Vocabulary terms that can be customized
-export interface VocabularyTerms {
-  epic?: string;      // Default: "Epic"
-  stage?: string;     // Default: "Stage"
-  activity?: string;  // Default: "Activity"
-  workstream?: string; // Default: "Workstream"
-}
-
-// Default vocabulary (fallback when no overrides exist)
-export const DEFAULT_VOCABULARY: Required<VocabularyTerms> = {
-  epic: "Epic",
-  stage: "Stage",
-  activity: "Activity",
-  workstream: "Workstream",
-};
-
-// ============================================
-// Microsoft Planner Integration
-// ============================================
-
-// Tenant Microsoft 365 integration credentials - stores per-tenant Azure AD app credentials
-// Supports both publisher multi-tenant app and bring-your-own-app (BYOA) scenarios
-export const tenantMicrosoftIntegrations = pgTable("tenant_microsoft_integrations", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  
-  // Tenant identifier (null = system default for single-tenant mode)
-  // Will be populated when multi-tenancy is activated
-  tenantId: varchar("tenant_id", { length: 255 }),
-  
-  // Azure AD tenant info (the customer's Microsoft 365 tenant)
-  azureTenantId: varchar("azure_tenant_id", { length: 255 }).notNull(),
-  azureTenantName: text("azure_tenant_name"), // e.g., "contoso.onmicrosoft.com"
-  
-  // Integration type
-  integrationType: text("integration_type").notNull().default('publisher_app'), // publisher_app, byoa (bring-your-own-app)
-  
-  // Azure app registration credentials
-  // For publisher_app: uses system environment variables (PLANNER_CLIENT_ID, etc.)
-  // For byoa: customer provides their own credentials (stored encrypted)
-  clientId: varchar("client_id", { length: 255 }), // Only for BYOA
-  clientSecretRef: text("client_secret_ref"), // Reference to secret storage (not the actual secret)
-  
-  // Permissions and consent status
-  grantedScopes: text("granted_scopes").array(), // e.g., ['Tasks.ReadWrite.All', 'Group.Read.All']
-  consentGrantedAt: timestamp("consent_granted_at"),
-  consentGrantedBy: varchar("consent_granted_by", { length: 255 }), // Admin who granted consent
-  
-  // Status
-  isActive: boolean("is_active").notNull().default(true),
-  lastValidatedAt: timestamp("last_validated_at"),
-  validationError: text("validation_error"),
-  
-  // Metadata
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-export const insertTenantMicrosoftIntegrationSchema = createInsertSchema(tenantMicrosoftIntegrations).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertTenantMicrosoftIntegration = z.infer<typeof insertTenantMicrosoftIntegrationSchema>;
-export type TenantMicrosoftIntegration = typeof tenantMicrosoftIntegrations.$inferSelect;
-
-// Project-to-Planner connection - links a Constellation project to a Microsoft Planner plan
-export const projectPlannerConnections = pgTable("project_planner_connections", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  
-  // Multi-tenancy support: link to tenant's Microsoft integration
-  // Null = use system default (single-tenant mode or publisher app)
-  integrationId: varchar("integration_id").references(() => tenantMicrosoftIntegrations.id, { onDelete: 'set null' }),
-  
-  // Planner plan details
-  planId: varchar("plan_id", { length: 255 }).notNull(), // Microsoft Planner Plan ID
-  planTitle: text("plan_title"), // Cached plan title
-  planWebUrl: text("plan_web_url"), // URL to open in Planner
-  
-  // Group/Team context (optional - for plans in Teams)
-  groupId: varchar("group_id", { length: 255 }), // Microsoft 365 Group ID (Team)
-  groupName: text("group_name"), // Cached group/team name
-  
-  // Channel context (for plans in specific channels)
-  channelId: varchar("channel_id", { length: 255 }), // Microsoft Teams Channel ID
-  channelName: text("channel_name"), // Cached channel name
-  
-  // Connection settings
-  syncEnabled: boolean("sync_enabled").notNull().default(true),
-  syncDirection: text("sync_direction").notNull().default('bidirectional'), // bidirectional, outbound_only, inbound_only
-  autoAddMembers: boolean("auto_add_members").notNull().default(false), // Auto-add missing users to the Team/Group
-  lastSyncAt: timestamp("last_sync_at"),
-  lastSyncStatus: text("last_sync_status"), // success, error, partial
-  lastSyncError: text("last_sync_error"),
-  
-  // Metadata
-  connectedBy: varchar("connected_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-export const insertProjectPlannerConnectionSchema = createInsertSchema(projectPlannerConnections).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertProjectPlannerConnection = z.infer<typeof insertProjectPlannerConnectionSchema>;
-export type ProjectPlannerConnection = typeof projectPlannerConnections.$inferSelect;
-
-// Planner task sync tracking - maps Constellation allocations to Planner tasks
-// allocationId is nullable to allow tracking failed imports without creating allocations
-export const plannerTaskSync = pgTable("planner_task_sync", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  connectionId: varchar("connection_id").notNull().references(() => projectPlannerConnections.id, { onDelete: 'cascade' }),
-  allocationId: varchar("allocation_id").references(() => projectAllocations.id, { onDelete: 'cascade' }), // Nullable for failed imports
-  
-  // Planner task details
-  taskId: varchar("task_id", { length: 255 }).notNull(), // Microsoft Planner Task ID
-  taskTitle: text("task_title"), // Cached task title
-  bucketId: varchar("bucket_id", { length: 255 }), // Bucket/column in Planner
-  bucketName: text("bucket_name"), // Cached bucket name (often week label)
-  
-  // Sync tracking
-  lastSyncedAt: timestamp("last_synced_at").notNull().default(sql`now()`),
-  syncStatus: text("sync_status").notNull().default('synced'), // synced, pending_outbound, pending_inbound, conflict, error, import_failed
-  syncError: text("sync_error"),
-  
-  // Version tracking for conflict detection
-  localVersion: integer("local_version").notNull().default(1),
-  remoteEtag: text("remote_etag"), // Planner's etag for optimistic concurrency
-  
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const insertPlannerTaskSyncSchema = createInsertSchema(plannerTaskSync).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertPlannerTaskSync = z.infer<typeof insertPlannerTaskSyncSchema>;
-export type PlannerTaskSync = typeof plannerTaskSync.$inferSelect;
-
-// User-to-Azure AD mapping - maps Constellation users to Azure AD users for task assignment
-export const userAzureMappings = pgTable("user_azure_mappings", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  
-  // Multi-tenancy support: link to tenant's Microsoft integration
-  // Null = use system default (single-tenant mode)
-  integrationId: varchar("integration_id").references(() => tenantMicrosoftIntegrations.id, { onDelete: 'cascade' }),
-  
-  azureUserId: varchar("azure_user_id", { length: 255 }).notNull(), // Azure AD Object ID
-  azureUserPrincipalName: text("azure_upn"), // e.g., user@company.com
-  azureDisplayName: text("azure_display_name"),
-  mappingMethod: text("mapping_method").notNull().default('email'), // email, manual, sso
-  verifiedAt: timestamp("verified_at"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-
-export const insertUserAzureMappingSchema = createInsertSchema(userAzureMappings).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertUserAzureMapping = z.infer<typeof insertUserAzureMappingSchema>;
-export type UserAzureMapping = typeof userAzureMappings.$inferSelect;
-
-// Sessions - for persistent session storage
 export const sessions = pgTable("sessions", {
-  id: varchar("id").primaryKey(), // Session ID (generated randomly)
+  id: varchar("id").primaryKey(),
   userId: varchar("user_id").notNull().references(() => users.id),
   email: text("email").notNull(),
   name: text("name").notNull(),
   role: text("role").notNull(),
-  ssoProvider: text("sso_provider"), // 'azure-ad' or null for regular login
-  ssoToken: text("sso_token"), // SSO access token (encrypted in production)
-  ssoRefreshToken: text("sso_refresh_token"), // SSO refresh token (encrypted in production) 
-  ssoTokenExpiry: timestamp("sso_token_expiry"), // When the SSO token expires
+  ssoProvider: text("sso_provider"),
+  ssoToken: text("sso_token"),
+  ssoRefreshToken: text("sso_refresh_token"),
+  ssoTokenExpiry: timestamp("sso_token_expiry"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   lastActivity: timestamp("last_activity").notNull().default(sql`now()`),
   expiresAt: timestamp("expires_at").notNull(),
@@ -2922,142 +227,89 @@ export const sessions = pgTable("sessions", {
   userIdIdx: index("sessions_user_id_idx").on(table.userId),
   expiresAtIdx: index("sessions_expires_at_idx").on(table.expiresAt),
 }));
-
-// Session insert schema
-export const insertSessionSchema = createInsertSchema(sessions).omit({
-  createdAt: true,
-  lastActivity: true
-});
+export const insertSessionSchema = createInsertSchema(sessions).omit({ createdAt: true, lastActivity: true });
 export type InsertSession = z.infer<typeof insertSessionSchema>;
 export type Session = typeof sessions.$inferSelect;
 
-// Scheduled Job Runs - for tracking scheduled job execution history
+// ============================================================================
+// SCHEDULED JOB RUNS, SYSTEM SETTINGS
+// ============================================================================
+
 export const scheduledJobRuns = pgTable("scheduled_job_runs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").references(() => tenants.id),
-  jobType: text("job_type").notNull(), // 'expense_reminder', 'time_reminder', etc.
-  status: text("status").notNull(), // 'running', 'completed', 'failed'
+  jobType: text("job_type").notNull(),
+  status: text("status").notNull(),
   startedAt: timestamp("started_at").notNull().default(sql`now()`),
   completedAt: timestamp("completed_at"),
-  triggeredBy: text("triggered_by").notNull(), // 'scheduled', 'manual'
+  triggeredBy: text("triggered_by").notNull(),
   triggeredByUserId: varchar("triggered_by_user_id").references(() => users.id),
-  resultSummary: jsonb("result_summary"), // { sent: 5, skipped: 2, errors: 0 }
+  resultSummary: jsonb("result_summary"),
   errorMessage: text("error_message"),
 }, (table) => ({
   tenantIdIdx: index("scheduled_job_runs_tenant_id_idx").on(table.tenantId),
   jobTypeIdx: index("scheduled_job_runs_job_type_idx").on(table.jobType),
   startedAtIdx: index("scheduled_job_runs_started_at_idx").on(table.startedAt),
 }));
-
-export const insertScheduledJobRunSchema = createInsertSchema(scheduledJobRuns).omit({
-  id: true,
-  startedAt: true,
-});
+export const insertScheduledJobRunSchema = createInsertSchema(scheduledJobRuns).omit({ id: true, startedAt: true });
 export type InsertScheduledJobRun = z.infer<typeof insertScheduledJobRunSchema>;
 export type ScheduledJobRun = typeof scheduledJobRuns.$inferSelect;
 
-// ============================================================================
-// RAIDD LOG TABLES (Risks, Action Items, Issues, Decisions, Dependencies)
-// ============================================================================
-
-export const raiddTypeEnum = z.enum(['risk', 'issue', 'decision', 'dependency', 'action_item']);
-export type RaiddType = z.infer<typeof raiddTypeEnum>;
-
-export const raiddStatusEnum = z.enum(['open', 'in_progress', 'mitigated', 'closed', 'deferred', 'superseded', 'resolved', 'accepted']);
-export type RaiddStatus = z.infer<typeof raiddStatusEnum>;
-
-export const raiddPriorityEnum = z.enum(['critical', 'high', 'medium', 'low']);
-export type RaiddPriority = z.infer<typeof raiddPriorityEnum>;
-
-export const raiddImpactEnum = z.enum(['critical', 'high', 'medium', 'low']);
-export type RaiddImpact = z.infer<typeof raiddImpactEnum>;
-
-export const raiddLikelihoodEnum = z.enum(['almost_certain', 'likely', 'possible', 'unlikely', 'rare']);
-export type RaiddLikelihood = z.infer<typeof raiddLikelihoodEnum>;
-
-export const raiddEntries = pgTable("raidd_entries", {
+export const systemSettings = pgTable("system_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  type: varchar("type", { length: 20 }).notNull(),
-  refNumber: varchar("ref_number", { length: 20 }),
-  title: text("title").notNull(),
+  settingKey: text("setting_key").notNull().unique(),
+  settingValue: text("setting_value").notNull(),
   description: text("description"),
-  status: varchar("status", { length: 20 }).notNull().default('open'),
-  priority: varchar("priority", { length: 20 }).notNull().default('medium'),
-  impact: varchar("impact", { length: 20 }),
-  likelihood: varchar("likelihood", { length: 20 }),
-  ownerId: varchar("owner_id").references(() => users.id),
-  assigneeId: varchar("assignee_id").references(() => users.id),
-  dueDate: date("due_date"),
-  closedAt: timestamp("closed_at"),
-  category: varchar("category", { length: 100 }),
-  mitigationPlan: text("mitigation_plan"),
-  resolutionNotes: text("resolution_notes"),
-  parentEntryId: varchar("parent_entry_id"),
-  convertedFromId: varchar("converted_from_id"),
-  supersededById: varchar("superseded_by_id"),
-  tags: jsonb("tags").$type<string[]>(),
-  createdBy: varchar("created_by").references(() => users.id),
-  updatedBy: varchar("updated_by").references(() => users.id),
+  settingType: text("setting_type").notNull().default("string"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_raidd_entries_tenant").on(table.tenantId),
-  projectIdx: index("idx_raidd_entries_project").on(table.projectId),
-  typeIdx: index("idx_raidd_entries_type").on(table.type),
-  statusIdx: index("idx_raidd_entries_status").on(table.status),
-  parentIdx: index("idx_raidd_entries_parent").on(table.parentEntryId),
-}));
-
-export const raiddEntriesRelations = relations(raiddEntries, ({ one }) => ({
-  project: one(projects, { fields: [raiddEntries.projectId], references: [projects.id] }),
-  owner: one(users, { fields: [raiddEntries.ownerId], references: [users.id] }),
-  assignee: one(users, { fields: [raiddEntries.assigneeId], references: [users.id] }),
-  createdByUser: one(users, { fields: [raiddEntries.createdBy], references: [users.id] }),
-  parentEntry: one(raiddEntries, { fields: [raiddEntries.parentEntryId], references: [raiddEntries.id] }),
-  convertedFrom: one(raiddEntries, { fields: [raiddEntries.convertedFromId], references: [raiddEntries.id] }),
-  supersededBy: one(raiddEntries, { fields: [raiddEntries.supersededById], references: [raiddEntries.id] }),
-}));
-
-export const insertRaiddEntrySchema = createInsertSchema(raiddEntries).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  refNumber: true,
-  closedAt: true,
-  supersededById: true,
-  convertedFromId: true,
 });
-export type InsertRaiddEntry = z.infer<typeof insertRaiddEntrySchema>;
-export type RaiddEntry = typeof raiddEntries.$inferSelect;
+export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
+export type SystemSetting = typeof systemSettings.$inferSelect;
 
 // ============================================================================
-// GROUNDING DOCUMENTS (AI Knowledge Base - Following Vega Pattern)
+// MICROSOFT 365 INTEGRATION (slim — kept for SSO + future Planner use)
 // ============================================================================
 
-export const groundingDocCategoryEnum = z.enum([
-  'pm_methodology',
-  'brand_voice',
-  'raidd_guidance',
-  'status_report',
-  'estimate_narrative',
-  'estimate_generation',
-  'invoice_narrative',
-  'general',
-]);
-export type GroundingDocCategory = z.infer<typeof groundingDocCategoryEnum>;
+export const tenantMicrosoftIntegrations = pgTable("tenant_microsoft_integrations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 255 }),
+  azureTenantId: varchar("azure_tenant_id", { length: 255 }).notNull(),
+  azureTenantName: text("azure_tenant_name"),
+  integrationType: text("integration_type").notNull().default('publisher_app'),
+  clientId: varchar("client_id", { length: 255 }),
+  clientSecretRef: text("client_secret_ref"),
+  grantedScopes: text("granted_scopes").array(),
+  consentGrantedAt: timestamp("consent_granted_at"),
+  consentGrantedBy: varchar("consent_granted_by", { length: 255 }),
+  isActive: boolean("is_active").notNull().default(true),
+  lastValidatedAt: timestamp("last_validated_at"),
+  validationError: text("validation_error"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+export const insertTenantMicrosoftIntegrationSchema = createInsertSchema(tenantMicrosoftIntegrations).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertTenantMicrosoftIntegration = z.infer<typeof insertTenantMicrosoftIntegrationSchema>;
+export type TenantMicrosoftIntegration = typeof tenantMicrosoftIntegrations.$inferSelect;
 
-export const GROUNDING_DOC_CATEGORY_LABELS: Record<GroundingDocCategory, string> = {
-  pm_methodology: "PM Methodology & Framework",
-  brand_voice: "Brand Voice & Communication Style",
-  raidd_guidance: "RAIDD Governance Guidelines",
-  status_report: "Status Report Guidance",
-  estimate_narrative: "Estimate & Proposal Narrative",
-  estimate_generation: "Estimate Generation & WBS Methodology",
-  invoice_narrative: "Invoice Narrative",
-  general: "General Knowledge",
-};
+export const userAzureMappings = pgTable("user_azure_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  azureUserId: varchar("azure_user_id", { length: 255 }).notNull(),
+  azureUserPrincipalName: text("azure_upn"),
+  azureDisplayName: text("azure_display_name"),
+  mappingMethod: text("mapping_method").notNull().default('email'),
+  verifiedAt: timestamp("verified_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export const insertUserAzureMappingSchema = createInsertSchema(userAzureMappings).omit({ id: true, createdAt: true });
+export type InsertUserAzureMapping = z.infer<typeof insertUserAzureMappingSchema>;
+export type UserAzureMapping = typeof userAzureMappings.$inferSelect;
+
+// ============================================================================
+// GROUNDING DOCUMENTS (used by support routes for AI assist; kept lean)
+// ============================================================================
 
 export const groundingDocuments = pgTable("grounding_documents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3078,40 +330,14 @@ export const groundingDocuments = pgTable("grounding_documents", {
   categoryIdx: index("idx_grounding_docs_category").on(table.category),
   activeIdx: index("idx_grounding_docs_active").on(table.isActive),
 }));
-
-export const groundingDocumentsRelations = relations(groundingDocuments, ({ one }) => ({
-  tenant: one(tenants, { fields: [groundingDocuments.tenantId], references: [tenants.id] }),
-  createdByUser: one(users, { fields: [groundingDocuments.createdBy], references: [users.id] }),
-  updatedByUser: one(users, { fields: [groundingDocuments.updatedBy], references: [users.id] }),
-}));
-
-export const insertGroundingDocumentSchema = createInsertSchema(groundingDocuments).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
+export const insertGroundingDocumentSchema = createInsertSchema(groundingDocuments).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertGroundingDocument = z.infer<typeof insertGroundingDocumentSchema>;
 export type GroundingDocument = typeof groundingDocuments.$inferSelect;
 
 // ============================================================================
-// SUPPORT TICKETS (Matches Vega table structure for future cross-app unification)
+// SUPPORT TICKETING
 // ============================================================================
 
-export const TICKET_CATEGORIES = ['bug', 'feature_request', 'question', 'feedback'] as const;
-export const TICKET_PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
-export const TICKET_STATUSES = ['new', 'open', 'in_progress', 'pending', 'on_hold', 'resolved', 'closed', 'cancelled'] as const;
-export const TICKET_TYPES = ['incident', 'service_request', 'problem', 'change', 'question'] as const;
-export const TICKET_SOURCES = ['web', 'portal', 'email', 'api', 'phone', 'chat'] as const;
-export const TICKET_IMPACTS = ['low', 'medium', 'high'] as const;
-export const TICKET_URGENCIES = ['low', 'medium', 'high'] as const;
-
-export type TicketCategory = typeof TICKET_CATEGORIES[number];
-export type TicketPriority = typeof TICKET_PRIORITIES[number];
-export type TicketStatus = typeof TICKET_STATUSES[number];
-export type TicketType = typeof TICKET_TYPES[number];
-export type TicketSource = typeof TICKET_SOURCES[number];
-
-// Support Queues (assignment groups, ServiceNow-style)
 export const supportQueues = pgTable("support_queues", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
@@ -3120,6 +346,7 @@ export const supportQueues = pgTable("support_queues", {
   emailAlias: text("email_alias"),
   plannerBucketName: text("planner_bucket_name"),
   defaultAssigneeId: varchar("default_assignee_id").references(() => users.id, { onDelete: 'set null' }),
+  escalationContactEmail: text("escalation_contact_email"),
   isActive: boolean("is_active").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
@@ -3132,6 +359,29 @@ export const insertSupportQueueSchema = createInsertSchema(supportQueues).omit({
 export type InsertSupportQueue = z.infer<typeof insertSupportQueueSchema>;
 export type SupportQueue = typeof supportQueues.$inferSelect;
 
+// Members of a queue eligible for round-robin / least-loaded auto-assignment
+export const supportQueueMembers = pgTable("support_queue_members", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  queueId: varchar("queue_id").notNull().references(() => supportQueues.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  uniqueQueueUser: uniqueIndex("unique_support_queue_member").on(table.queueId, table.userId),
+  queueIdx: index("idx_support_queue_members_queue").on(table.queueId),
+  userIdx: index("idx_support_queue_members_user").on(table.userId),
+}));
+export const insertSupportQueueMemberSchema = createInsertSchema(supportQueueMembers).omit({ id: true, createdAt: true });
+export type InsertSupportQueueMember = z.infer<typeof insertSupportQueueMemberSchema>;
+export type SupportQueueMember = typeof supportQueueMembers.$inferSelect;
+
+// Round-robin tiebreaker state for auto-assignment within a queue
+export const supportQueueRoundRobinState = pgTable("support_queue_round_robin_state", {
+  queueId: varchar("queue_id").primaryKey().references(() => supportQueues.id, { onDelete: 'cascade' }),
+  lastAssignedUserId: varchar("last_assigned_user_id").references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+export type SupportQueueRoundRobinState = typeof supportQueueRoundRobinState.$inferSelect;
+
 // SLA Policies
 export const supportSlaPolicies = pgTable("support_sla_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3142,6 +392,7 @@ export const supportSlaPolicies = pgTable("support_sla_policies", {
   firstResponseMinutes: integer("first_response_minutes").notNull().default(60),
   resolutionMinutes: integer("resolution_minutes").notNull().default(1440),
   businessHoursOnly: boolean("business_hours_only").notNull().default(false),
+  bumpPriorityOnBreach: boolean("bump_priority_on_breach").notNull().default(false),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
@@ -3152,7 +403,6 @@ export const insertSupportSlaPolicySchema = createInsertSchema(supportSlaPolicie
 export type InsertSupportSlaPolicy = z.infer<typeof insertSupportSlaPolicySchema>;
 export type SupportSlaPolicy = typeof supportSlaPolicies.$inferSelect;
 
-// Knowledge Base Articles
 export const supportKbArticles = pgTable("support_kb_articles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
@@ -3166,6 +416,7 @@ export const supportKbArticles = pgTable("support_kb_articles", {
   publishedAt: timestamp("published_at"),
   viewCount: integer("view_count").notNull().default(0),
   helpfulCount: integer("helpful_count").notNull().default(0),
+  notHelpfulCount: integer("not_helpful_count").notNull().default(0),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -3174,9 +425,24 @@ export const supportKbArticles = pgTable("support_kb_articles", {
 }));
 export const insertSupportKbArticleSchema = createInsertSchema(supportKbArticles, {
   tags: z.array(z.string()).optional(),
-}).omit({ id: true, createdAt: true, updatedAt: true, viewCount: true, helpfulCount: true });
+}).omit({ id: true, createdAt: true, updatedAt: true, viewCount: true, helpfulCount: true, notHelpfulCount: true });
 export type InsertSupportKbArticle = z.infer<typeof insertSupportKbArticleSchema>;
 export type SupportKbArticle = typeof supportKbArticles.$inferSelect;
+
+// Lightweight portal/support analytics events (article views, deflection, etc.)
+export const supportEvents = pgTable("support_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  eventType: varchar("event_type", { length: 64 }).notNull(),
+  articleId: varchar("article_id"),
+  sessionId: varchar("session_id", { length: 128 }),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_events_tenant").on(table.tenantId),
+  typeIdx: index("idx_support_events_type").on(table.eventType),
+}));
+export type SupportEvent = typeof supportEvents.$inferSelect;
 
 // App Integration Keys (for SYNOZUR apps to file tickets via API)
 export const supportAppIntegrationKeys = pgTable("support_app_integration_keys", {
@@ -3220,7 +486,6 @@ export const supportTickets = pgTable("support_tickets", {
   updatedAt: timestamp("updated_at").default(sql`now()`).notNull(),
   resolvedAt: timestamp("resolved_at"),
   resolvedBy: varchar("resolved_by").references(() => users.id, { onDelete: 'set null' }),
-  // ITSM extensions
   ticketType: text("ticket_type").notNull().default("incident"),
   source: text("source").notNull().default("web"),
   impact: text("impact"),
@@ -3232,14 +497,10 @@ export const supportTickets = pgTable("support_tickets", {
   resolutionDueAt: timestamp("resolution_due_at"),
   slaBreached: boolean("sla_breached").notNull().default(false),
   closedAt: timestamp("closed_at"),
-  // External requester (for tickets not tied to an internal user)
   externalRequesterEmail: text("external_requester_email"),
   externalRequesterName: text("external_requester_name"),
-  // Magic-link token for portal access
   portalToken: varchar("portal_token", { length: 64 }),
-  // App integration (when filed via API)
   appIntegrationKeyId: varchar("app_integration_key_id").references(() => supportAppIntegrationKeys.id, { onDelete: 'set null' }),
-  // CSAT
   csatScore: integer("csat_score"),
   csatComment: text("csat_comment"),
   csatSubmittedAt: timestamp("csat_submitted_at"),
@@ -3248,27 +509,32 @@ export const supportTickets = pgTable("support_tickets", {
   queueIdx: index("idx_support_tickets_queue").on(table.queueId),
   statusIdx: index("idx_support_tickets_status").on(table.status),
 }));
-
 export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit({
-  id: true,
-  ticketNumber: true,
-  createdAt: true,
-  updatedAt: true,
-  resolvedAt: true,
-  resolvedBy: true,
+  id: true, ticketNumber: true, createdAt: true, updatedAt: true, resolvedAt: true, resolvedBy: true,
 });
-
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
 export type SupportTicket = typeof supportTickets.$inferSelect;
 
 export const supportTicketReplies = pgTable("support_ticket_replies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null' }),
   message: text("message").notNull(),
   isInternal: boolean("is_internal").default(false),
+  // RFC 5322 message identifiers for reliable email threading.
+  // messageId is the Message-ID header of the email we sent or received for this reply.
+  // inReplyTo is the In-Reply-To header value of the inbound message (so we can chain).
+  messageId: text("message_id"),
+  inReplyTo: text("in_reply_to"),
+  // Tracks how the reply entered the system: "web" (agent console), "portal", "email", "api".
+  source: text("source"),
+  // Free-form sender label for inbound emails when userId is null (e.g. external requester address).
+  externalAuthor: text("external_author"),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
-});
+}, (table) => ({
+  messageIdIdx: index("idx_support_ticket_replies_message_id").on(table.messageId),
+  ticketIdx: index("idx_support_ticket_replies_ticket").on(table.ticketId),
+}));
 
 export const insertSupportTicketReplySchema = createInsertSchema(supportTicketReplies).omit({
   id: true,
@@ -3277,6 +543,48 @@ export const insertSupportTicketReplySchema = createInsertSchema(supportTicketRe
 
 export type InsertSupportTicketReply = z.infer<typeof insertSupportTicketReplySchema>;
 export type SupportTicketReply = typeof supportTicketReplies.$inferSelect;
+
+// Inbound email attachments captured for a ticket. Stored either inline in object
+// storage (storageKey set) or — for the dev/local environment — on disk.
+export const supportTicketAttachments = pgTable("support_ticket_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  replyId: varchar("reply_id").references(() => supportTicketReplies.id, { onDelete: 'cascade' }),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type"),
+  sizeBytes: integer("size_bytes").notNull().default(0),
+  storageKey: text("storage_key").notNull(),
+  storageBackend: text("storage_backend").notNull().default("local"), // 'local' | 'object_storage'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  ticketIdx: index("idx_support_attachments_ticket").on(table.ticketId),
+  replyIdx: index("idx_support_attachments_reply").on(table.replyId),
+}));
+
+export const insertSupportTicketAttachmentSchema = createInsertSchema(supportTicketAttachments).omit({ id: true, createdAt: true });
+export type InsertSupportTicketAttachment = z.infer<typeof insertSupportTicketAttachmentSchema>;
+export type SupportTicketAttachment = typeof supportTicketAttachments.$inferSelect;
+
+// Microsoft Graph mailbox change-notification subscriptions used to drive the
+// inbound support email pipeline. Persisted so the renewer + notification
+// handler survive process restarts.
+export const supportEmailSubscriptions = pgTable("support_email_subscriptions", {
+  id: varchar("id").primaryKey(), // Graph subscription id
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  azureTenantId: text("azure_tenant_id").notNull(),
+  mailbox: text("mailbox").notNull(),
+  clientState: text("client_state").notNull(),
+  notificationUrl: text("notification_url").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_email_subs_tenant").on(table.tenantId),
+}));
+
+export const insertSupportEmailSubscriptionSchema = createInsertSchema(supportEmailSubscriptions).omit({ createdAt: true, updatedAt: true });
+export type InsertSupportEmailSubscription = z.infer<typeof insertSupportEmailSubscriptionSchema>;
+export type SupportEmailSubscription = typeof supportEmailSubscriptions.$inferSelect;
 
 // Support Ticket to Planner Task sync tracking
 export const supportTicketPlannerSync = pgTable("support_ticket_planner_sync", {
@@ -3294,15 +602,10 @@ export const supportTicketPlannerSync = pgTable("support_ticket_planner_sync", {
   remoteEtag: text("remote_etag"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
-
-export const insertSupportTicketPlannerSyncSchema = createInsertSchema(supportTicketPlannerSync).omit({
-  id: true,
-  createdAt: true,
-});
+export const insertSupportTicketPlannerSyncSchema = createInsertSchema(supportTicketPlannerSync).omit({ id: true, createdAt: true });
 export type InsertSupportTicketPlannerSync = z.infer<typeof insertSupportTicketPlannerSyncSchema>;
 export type SupportTicketPlannerSync = typeof supportTicketPlannerSync.$inferSelect;
 
-// Watchers (CC) on a ticket — by user OR external email
 export const supportTicketWatchers = pgTable("support_ticket_watchers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
@@ -3316,7 +619,6 @@ export const insertSupportTicketWatcherSchema = createInsertSchema(supportTicket
 export type InsertSupportTicketWatcher = z.infer<typeof insertSupportTicketWatcherSchema>;
 export type SupportTicketWatcher = typeof supportTicketWatchers.$inferSelect;
 
-// Audit log of state/assignment changes — ServiceNow-like activity feed
 export const supportTicketActivity = pgTable("support_ticket_activity", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
@@ -3335,618 +637,105 @@ export const insertSupportTicketActivitySchema = createInsertSchema(supportTicke
 export type InsertSupportTicketActivity = z.infer<typeof insertSupportTicketActivitySchema>;
 export type SupportTicketActivity = typeof supportTicketActivity.$inferSelect;
 
-// ============================================================================
-// CRM INTEGRATION TABLES (Provider-agnostic, tenant-scoped)
-// ============================================================================
-
-export const crmProviderEnum = z.enum(['hubspot', 'salesforce']);
-export type CrmProvider = z.infer<typeof crmProviderEnum>;
-
-export const crmConnections = pgTable("crm_connections", {
+// ===== Saved Filters (per user, scoped to tenant) =====
+export const supportSavedFilters = pgTable("support_saved_filters", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  crmProvider: varchar("crm_provider", { length: 50 }).notNull(),
-  isEnabled: boolean("is_enabled").notNull().default(false),
-  dealProbabilityThreshold: integer("deal_probability_threshold").notNull().default(40),
-  dealStageFilter: text("deal_stage_filter"),
-  autoCreateEstimate: boolean("auto_create_estimate").notNull().default(false),
-  syncDirection: varchar("sync_direction", { length: 20 }).notNull().default("bidirectional"),
-  lastSyncAt: timestamp("last_sync_at"),
-  lastSyncStatus: varchar("last_sync_status", { length: 20 }),
-  lastSyncError: text("last_sync_error"),
-  settings: jsonb("settings").$type<Record<string, any>>(),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_crm_connections_tenant").on(table.tenantId),
-  uniqueTenantProvider: uniqueIndex("unique_crm_tenant_provider").on(table.tenantId, table.crmProvider),
-}));
-
-export const insertCrmConnectionSchema = createInsertSchema(crmConnections, {
-  settings: z.record(z.string(), z.any()).optional(),
-}).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  lastSyncAt: true,
-  lastSyncStatus: true,
-  lastSyncError: true,
-});
-export type InsertCrmConnection = z.infer<typeof insertCrmConnectionSchema>;
-export type CrmConnection = typeof crmConnections.$inferSelect;
-
-export const crmObjectMappings = pgTable("crm_object_mappings", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  crmProvider: varchar("crm_provider", { length: 50 }).notNull(),
-  crmObjectType: varchar("crm_object_type", { length: 50 }).notNull(),
-  crmObjectId: varchar("crm_object_id", { length: 255 }).notNull(),
-  localObjectType: varchar("local_object_type", { length: 50 }).notNull(),
-  localObjectId: varchar("local_object_id", { length: 255 }).notNull(),
-  metadata: jsonb("metadata").$type<Record<string, any>>(),
-  lastSyncAt: timestamp("last_sync_at").notNull().default(sql`now()`),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_crm_mappings_tenant").on(table.tenantId),
-  crmObjectIdx: index("idx_crm_mappings_crm_object").on(table.crmProvider, table.crmObjectType, table.crmObjectId),
-  localObjectIdx: index("idx_crm_mappings_local_object").on(table.localObjectType, table.localObjectId),
-  uniqueMapping: uniqueIndex("unique_crm_object_mapping").on(table.tenantId, table.crmProvider, table.crmObjectType, table.crmObjectId, table.localObjectType, table.localObjectId),
-}));
-
-export const insertCrmObjectMappingSchema = createInsertSchema(crmObjectMappings).omit({
-  id: true,
-  createdAt: true,
-  lastSyncAt: true,
-});
-export type InsertCrmObjectMapping = z.infer<typeof insertCrmObjectMappingSchema>;
-export type CrmObjectMapping = typeof crmObjectMappings.$inferSelect;
-
-export const crmSyncLog = pgTable("crm_sync_log", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  crmProvider: varchar("crm_provider", { length: 50 }).notNull(),
-  action: varchar("action", { length: 50 }).notNull(),
-  crmObjectType: varchar("crm_object_type", { length: 50 }),
-  crmObjectId: varchar("crm_object_id", { length: 255 }),
-  localObjectType: varchar("local_object_type", { length: 50 }),
-  localObjectId: varchar("local_object_id", { length: 255 }),
-  status: varchar("status", { length: 20 }).notNull(),
-  errorMessage: text("error_message"),
-  requestPayload: jsonb("request_payload"),
-  responsePayload: jsonb("response_payload"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_crm_sync_log_tenant").on(table.tenantId),
-  createdAtIdx: index("idx_crm_sync_log_created").on(table.createdAt),
-}));
-
-export const insertCrmSyncLogSchema = createInsertSchema(crmSyncLog).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertCrmSyncLog = z.infer<typeof insertCrmSyncLogSchema>;
-export type CrmSyncLog = typeof crmSyncLog.$inferSelect;
-
-// ============================================================================
-// PROJECT DELIVERABLES
-// ============================================================================
-
-export const deliverableStatusEnum = z.enum(['not-started', 'in-progress', 'in-review', 'accepted', 'rejected']);
-export type DeliverableStatus = z.infer<typeof deliverableStatusEnum>;
-
-export const projectDeliverables = pgTable("project_deliverables", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  description: text("description"),
-  ownerUserId: varchar("owner_user_id").notNull().references(() => users.id),
-  epicId: varchar("epic_id"),
-  stageId: varchar("stage_id"),
-  status: varchar("status", { length: 20 }).notNull().default('not-started'),
-  targetDate: date("target_date"),
-  deliveredDate: date("delivered_date"),
-  acceptanceNotes: text("acceptance_notes"),
+  query: jsonb("query").notNull(),
+  isPinned: boolean("is_pinned").notNull().default(false),
   sortOrder: integer("sort_order").notNull().default(0),
-  createdBy: varchar("created_by").references(() => users.id),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantIdx: index("idx_project_deliverables_tenant").on(table.tenantId),
-  projectIdx: index("idx_project_deliverables_project").on(table.projectId),
-  statusIdx: index("idx_project_deliverables_status").on(table.status),
-}));
-
-export const projectDeliverablesRelations = relations(projectDeliverables, ({ one }) => ({
-  project: one(projects, { fields: [projectDeliverables.projectId], references: [projects.id] }),
-  tenant: one(tenants, { fields: [projectDeliverables.tenantId], references: [tenants.id] }),
-  owner: one(users, { fields: [projectDeliverables.ownerUserId], references: [users.id] }),
-  createdByUser: one(users, { fields: [projectDeliverables.createdBy], references: [users.id] }),
-}));
-
-export const insertProjectDeliverableSchema = createInsertSchema(projectDeliverables).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertProjectDeliverable = z.infer<typeof insertProjectDeliverableSchema>;
-export type ProjectDeliverable = typeof projectDeliverables.$inferSelect;
-
-export const deliverableStatusHistory = pgTable("deliverable_status_history", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  deliverableId: varchar("deliverable_id").notNull().references(() => projectDeliverables.id, { onDelete: 'cascade' }),
-  oldStatus: varchar("old_status", { length: 20 }),
-  newStatus: varchar("new_status", { length: 20 }).notNull(),
-  changedBy: varchar("changed_by").references(() => users.id),
-  changedAt: timestamp("changed_at").notNull().default(sql`now()`),
-  comments: text("comments"),
-}, (table) => ({
-  deliverableIdx: index("idx_deliverable_status_history_deliverable").on(table.deliverableId),
-}));
-
-export const deliverableStatusHistoryRelations = relations(deliverableStatusHistory, ({ one }) => ({
-  deliverable: one(projectDeliverables, { fields: [deliverableStatusHistory.deliverableId], references: [projectDeliverables.id] }),
-  changedByUser: one(users, { fields: [deliverableStatusHistory.changedBy], references: [users.id] }),
-}));
-
-export const insertDeliverableStatusHistorySchema = createInsertSchema(deliverableStatusHistory).omit({
-  id: true,
-  changedAt: true,
-});
-export type InsertDeliverableStatusHistory = z.infer<typeof insertDeliverableStatusHistorySchema>;
-export type DeliverableStatusHistory = typeof deliverableStatusHistory.$inferSelect;
-
-// ============================================================================
-// AI MODEL MANAGEMENT & USAGE TRACKING (Following Vega Pattern)
-// ============================================================================
-
-export const AI_PROVIDERS = {
-  REPLIT: 'replit_ai',
-  AZURE_OPENAI: 'azure_openai',
-  AZURE_FOUNDRY: 'azure_foundry',
-  OPENAI: 'openai',
-  ANTHROPIC: 'anthropic',
-} as const;
-
-export type AIProvider = typeof AI_PROVIDERS[keyof typeof AI_PROVIDERS];
-
-export const AI_FEATURES = {
-  ESTIMATE_GENERATION: 'estimate_generation',
-  ESTIMATE_NARRATIVE: 'estimate_narrative',
-  ESTIMATE_FROM_NARRATIVE: 'estimate_from_narrative',
-  INVOICE_NARRATIVE: 'invoice_narrative',
-  STATUS_REPORT: 'status_report',
-  PPTX_REPORT: 'pptx_report',
-  DELIVERABLE_EXTRACTION: 'deliverable_extraction',
-  HELP_CHAT: 'help_chat',
-  REPORT_QUERY: 'report_query',
-  RAIDD_ANALYSIS: 'raidd_analysis',
-  SUB_SOW_NARRATIVE: 'sub_sow_narrative',
-  EXECUTIVE_NARRATIVE: 'executive_narrative',
-  TIME_ENTRY_REWRITE: 'time_entry_rewrite',
-  CUSTOM: 'custom',
-  OTHER: 'other',
-} as const;
-
-export type AIFeature = typeof AI_FEATURES[keyof typeof AI_FEATURES];
-
-export const AI_MODELS: Record<string, readonly string[]> = {
-  replit_ai: ['gpt-5', 'gpt-4o', 'gpt-4o-mini', 'claude-sonnet-4', 'claude-opus-4'],
-  azure_openai: ['gpt-5', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4'],
-  azure_foundry: ['gpt-5.4', 'gpt-5.2', 'gpt-4o'],
-  openai: ['gpt-5', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-  anthropic: ['claude-sonnet-4', 'claude-opus-4', 'claude-3.5-sonnet', 'claude-3-haiku'],
-} as const;
-
-export const AI_MODEL_INFO: Record<string, {
-  name: string;
-  description: string;
-  costTier: 'free' | 'low' | 'medium' | 'high';
-  providers: string[];
-  contextWindow: number;
-  costPer1kPrompt: number;
-  costPer1kCompletion: number;
-}> = {
-  'gpt-5.4': { name: 'GPT-5.4', description: 'Latest and most capable OpenAI model', costTier: 'high', providers: ['azure_foundry'], contextWindow: 128000, costPer1kPrompt: 0.005, costPer1kCompletion: 0.015 },
-  'gpt-5.2': { name: 'GPT-5.2', description: 'Advanced reasoning OpenAI model', costTier: 'high', providers: ['azure_foundry'], contextWindow: 128000, costPer1kPrompt: 0.005, costPer1kCompletion: 0.015 },
-  'gpt-5': { name: 'GPT-5', description: 'Most capable OpenAI model', costTier: 'high', providers: ['replit_ai', 'openai', 'azure_openai', 'azure_foundry'], contextWindow: 128000, costPer1kPrompt: 0.005, costPer1kCompletion: 0.015 },
-  'gpt-4o': { name: 'GPT-4o', description: 'Fast multimodal model', costTier: 'medium', providers: ['replit_ai', 'openai', 'azure_openai', 'azure_foundry'], contextWindow: 128000, costPer1kPrompt: 0.0025, costPer1kCompletion: 0.01 },
-  'gpt-4o-mini': { name: 'GPT-4o Mini', description: 'Cost-effective for simple tasks', costTier: 'low', providers: ['replit_ai', 'openai', 'azure_openai', 'azure_foundry'], contextWindow: 128000, costPer1kPrompt: 0.00015, costPer1kCompletion: 0.0006 },
-  'gpt-4-turbo': { name: 'GPT-4 Turbo', description: 'Enhanced GPT-4 with vision', costTier: 'medium', providers: ['openai', 'azure_openai'], contextWindow: 128000, costPer1kPrompt: 0.01, costPer1kCompletion: 0.03 },
-  'gpt-4': { name: 'GPT-4', description: 'Original GPT-4 model', costTier: 'medium', providers: ['openai', 'azure_openai'], contextWindow: 8192, costPer1kPrompt: 0.03, costPer1kCompletion: 0.06 },
-  'claude-sonnet-4': { name: 'Claude Sonnet 4', description: 'Fast balanced Anthropic model', costTier: 'medium', providers: ['replit_ai', 'anthropic'], contextWindow: 200000, costPer1kPrompt: 0.003, costPer1kCompletion: 0.015 },
-  'claude-opus-4': { name: 'Claude Opus 4', description: 'Most capable Anthropic model', costTier: 'high', providers: ['replit_ai', 'anthropic'], contextWindow: 200000, costPer1kPrompt: 0.015, costPer1kCompletion: 0.075 },
-  'claude-3.5-sonnet': { name: 'Claude 3.5 Sonnet', description: 'Previous gen balanced model', costTier: 'medium', providers: ['anthropic'], contextWindow: 200000, costPer1kPrompt: 0.003, costPer1kCompletion: 0.015 },
-  'claude-3-haiku': { name: 'Claude 3 Haiku', description: 'Fast and cost-effective', costTier: 'low', providers: ['anthropic'], contextWindow: 200000, costPer1kPrompt: 0.00025, costPer1kCompletion: 0.00125 },
-};
-
-export type AIProviderConfig = {
-  azureFoundryEndpoint?: string;
-  azureFoundryDeployment?: string;
-  azureOpenAIEndpoint?: string;
-  azureOpenAIDeployment?: string;
-  customEndpoint?: string;
-};
-
-export const aiConfiguration = pgTable("ai_configuration", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  activeProvider: text("active_provider").notNull().default('replit_ai'),
-  activeModel: text("active_model").notNull().default('gpt-5'),
-  providerConfig: jsonb("provider_config").$type<AIProviderConfig>(),
-  enableStreaming: boolean("enable_streaming").default(true),
-  maxTokensPerRequest: integer("max_tokens_per_request").default(4096),
-  monthlyTokenBudget: integer("monthly_token_budget"),
-  alertThresholds: jsonb("alert_thresholds").$type<number[]>().default([75, 90, 100]),
-  alertEnabled: boolean("alert_enabled").default(true),
-  updatedBy: varchar("updated_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  userIdx: index("support_saved_filters_user_idx").on(t.userId),
+}));
+export const insertSupportSavedFilterSchema = createInsertSchema(supportSavedFilters).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSupportSavedFilter = z.infer<typeof insertSupportSavedFilterSchema>;
+export type SupportSavedFilter = typeof supportSavedFilters.$inferSelect;
 
-export const insertAiConfigurationSchema = createInsertSchema(aiConfiguration).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertAiConfiguration = z.infer<typeof insertAiConfigurationSchema>;
-export type AiConfiguration = typeof aiConfiguration.$inferSelect;
-
-export const aiUsageLogs = pgTable("ai_usage_logs", {
+// ===== Durable rate-limit buckets (sliding-window log) =====
+export const supportRateLimitBuckets = pgTable("support_rate_limit_buckets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: 'cascade' }),
-  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null' }),
-  provider: text("provider").notNull(),
-  model: text("model").notNull(),
-  modelVersion: text("model_version"),
-  deploymentName: text("deployment_name"),
-  feature: text("feature").notNull(),
-  promptTokens: integer("prompt_tokens").notNull().default(0),
-  completionTokens: integer("completion_tokens").notNull().default(0),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  estimatedCostMicrodollars: integer("estimated_cost_microdollars"),
-  latencyMs: integer("latency_ms"),
-  wasStreaming: boolean("was_streaming").default(false),
-  requestId: text("request_id"),
-  errorCode: text("error_code"),
-  errorMessage: text("error_message"),
-  metadata: jsonb("metadata"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  tenantIdx: index("idx_ai_usage_tenant").on(table.tenantId),
-  featureIdx: index("idx_ai_usage_feature").on(table.feature),
-  createdIdx: index("idx_ai_usage_created").on(table.createdAt),
-  providerIdx: index("idx_ai_usage_provider").on(table.provider),
+  bucketKey: text("bucket_key").notNull(),
+  hitAt: timestamp("hit_at").notNull().defaultNow(),
+}, (t) => ({
+  keyTimeIdx: index("support_rl_key_time_idx").on(t.bucketKey, t.hitAt),
 }));
-
-export const aiUsageLogsRelations = relations(aiUsageLogs, ({ one }) => ({
-  tenant: one(tenants, { fields: [aiUsageLogs.tenantId], references: [tenants.id] }),
-  user: one(users, { fields: [aiUsageLogs.userId], references: [users.id] }),
-}));
-
-export const insertAiUsageLogSchema = createInsertSchema(aiUsageLogs).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertAiUsageLog = z.infer<typeof insertAiUsageLogSchema>;
-export type AiUsageLog = typeof aiUsageLogs.$inferSelect;
-
-export const aiUsageSummaries = pgTable("ai_usage_summaries", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: 'cascade' }),
-  periodType: text("period_type").notNull(),
-  periodStart: timestamp("period_start").notNull(),
-  periodEnd: timestamp("period_end").notNull(),
-  totalRequests: integer("total_requests").notNull().default(0),
-  totalPromptTokens: integer("total_prompt_tokens").notNull().default(0),
-  totalCompletionTokens: integer("total_completion_tokens").notNull().default(0),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  totalCostMicrodollars: integer("total_cost_microdollars").notNull().default(0),
-  usageByModel: jsonb("usage_by_model").$type<Record<string, { requests: number; tokens: number; costMicrodollars: number }>>(),
-  usageByFeature: jsonb("usage_by_feature").$type<Record<string, { requests: number; tokens: number; costMicrodollars: number }>>(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  tenantIdx: index("idx_ai_summary_tenant").on(table.tenantId),
-  periodIdx: index("idx_ai_summary_period").on(table.periodType, table.periodStart),
-}));
-
-export const aiUsageSummariesRelations = relations(aiUsageSummaries, ({ one }) => ({
-  tenant: one(tenants, { fields: [aiUsageSummaries.tenantId], references: [tenants.id] }),
-}));
-
-export const insertAiUsageSummarySchema = createInsertSchema(aiUsageSummaries).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertAiUsageSummary = z.infer<typeof insertAiUsageSummarySchema>;
-export type AiUsageSummary = typeof aiUsageSummaries.$inferSelect;
-
-export const aiUsageAlerts = pgTable("ai_usage_alerts", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  periodMonth: varchar("period_month", { length: 7 }).notNull(),
-  thresholdPercent: integer("threshold_percent").notNull(),
-  tokenUsageAtAlert: integer("token_usage_at_alert").notNull(),
-  monthlyBudget: integer("monthly_budget").notNull(),
-  alertedAt: timestamp("alerted_at").defaultNow().notNull(),
-  notifiedEmails: jsonb("notified_emails").$type<string[]>(),
-}, (table) => ({
-  periodThresholdUnique: uniqueIndex("idx_ai_alert_period_threshold_unique").on(table.periodMonth, table.thresholdPercent),
-}));
-
-export const insertAiUsageAlertSchema = createInsertSchema(aiUsageAlerts).omit({
-  id: true,
-  alertedAt: true,
-});
-export type InsertAiUsageAlert = z.infer<typeof insertAiUsageAlertSchema>;
-export type AiUsageAlert = typeof aiUsageAlerts.$inferSelect;
-
-// Industry preset vocabularies
-export const INDUSTRY_PRESETS: Record<string, Required<VocabularyTerms>> = {
-  default: DEFAULT_VOCABULARY,
-  consulting: {
-    epic: "Program",
-    stage: "Phase",
-    activity: "Gate",
-    workstream: "Category",
-  },
-  software: {
-    epic: "Release",
-    stage: "Sprint",
-    activity: "Task",
-    workstream: "Feature",
-  },
-  construction: {
-    epic: "Phase",
-    stage: "Milestone",
-    activity: "Deliverable",
-    workstream: "Trade",
-  },
-};
-
-// Zod schema for vocabulary validation
-export const vocabularyTermsSchema = z.object({
-  epic: z.string().min(1).max(50).optional(),
-  stage: z.string().min(1).max(50).optional(),
-  activity: z.string().min(1).max(50).optional(),
-  workstream: z.string().min(1).max(50).optional(),
-}).strict();
-
-export type VocabularyTermsInput = z.infer<typeof vocabularyTermsSchema>;
-
-// Page view analytics (public-page visit tracking)
-export const pageViews = pgTable("page_views", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  path: text("path").notNull(),          // e.g. "/", "/signup"
-  sessionId: text("session_id"),         // anonymous session token from localStorage
-  referrer: text("referrer"),            // document.referrer
-  userAgent: text("user_agent"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-});
-export type PageView = typeof pageViews.$inferSelect;
+export const insertSupportRateLimitBucketSchema = createInsertSchema(supportRateLimitBuckets).omit({ id: true, hitAt: true });
+export type InsertSupportRateLimitBucket = z.infer<typeof insertSupportRateLimitBucketSchema>;
+export type SupportRateLimitBucket = typeof supportRateLimitBuckets.$inferSelect;
 
 // ============================================================================
-// TEAMS AUTOMATION (Phase 2) — Member sync, SharePoint provisioning, Guest invitations
-// ============================================================================
-
-// Automation action types
-export const teamsAutomationActionEnum = z.enum([
-  'member_added', 'member_removed', 'member_add_failed', 'member_remove_failed',
-  'sharepoint_provisioned', 'sharepoint_provision_failed',
-  'guest_invited', 'guest_invite_failed', 'guest_redeemed',
-  'sync_started', 'sync_completed', 'sync_failed'
-]);
-export type TeamsAutomationAction = z.infer<typeof teamsAutomationActionEnum>;
-
-// Teams Automation Logs — audit trail for all automated Teams operations
-export const teamsAutomationLogs = pgTable("teams_automation_logs", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
-  teamId: varchar("team_id", { length: 255 }),
-  channelId: varchar("channel_id", { length: 255 }),
-  action: text("action").notNull(), // TeamsAutomationAction values
-  targetUserId: varchar("target_user_id").references(() => users.id, { onDelete: "set null" }),
-  targetAzureUserId: varchar("target_azure_user_id", { length: 255 }),
-  targetEmail: text("target_email"),
-  details: jsonb("details").$type<Record<string, any>>(),
-  success: boolean("success").notNull().default(true),
-  errorMessage: text("error_message"),
-  triggeredBy: varchar("triggered_by").references(() => users.id, { onDelete: "set null" }), // null = system/automatic
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  tenantCreatedIdx: index("idx_teams_auto_logs_tenant_created").on(table.tenantId, table.createdAt),
-  projectCreatedIdx: index("idx_teams_auto_logs_project_created").on(table.projectId, table.createdAt),
-  teamCreatedIdx: index("idx_teams_auto_logs_team_created").on(table.teamId, table.createdAt),
-  actionCreatedIdx: index("idx_teams_auto_logs_action_created").on(table.action, table.createdAt),
-}));
-
-export const insertTeamsAutomationLogSchema = createInsertSchema(teamsAutomationLogs).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertTeamsAutomationLog = z.infer<typeof insertTeamsAutomationLogSchema>;
-export type TeamsAutomationLog = typeof teamsAutomationLogs.$inferSelect;
-
-// Guest Invitations — track Azure AD B2B guest invitations
-export const guestInvitations = pgTable("guest_invitations", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
-  teamId: varchar("team_id", { length: 255 }).notNull(),
-  invitedEmail: text("invited_email").notNull(),
-  invitedDisplayName: text("invited_display_name"),
-  invitedUserId: varchar("invited_user_id").references(() => users.id, { onDelete: "set null" }), // Constellation user if exists
-  azureGuestUserId: varchar("azure_guest_user_id", { length: 255 }), // Set after invitation accepted
-  invitationId: varchar("invitation_id", { length: 255 }), // Azure AD invitation ID
-  redemptionUrl: text("redemption_url"), // URL for guest to accept invitation
-  status: text("status").notNull().default("pending"), // pending, sent, accepted, failed, expired
-  role: text("role").notNull().default("member"), // member or owner
-  sendInvitationMessage: boolean("send_invitation_message").notNull().default(true),
-  customMessage: text("custom_message"),
-  invitedBy: varchar("invited_by").references(() => users.id, { onDelete: "set null" }),
-  sentAt: timestamp("sent_at"),
-  acceptedAt: timestamp("accepted_at"),
-  expiresAt: timestamp("expires_at"),
-  errorMessage: text("error_message"),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
-});
-
-export const insertGuestInvitationSchema = createInsertSchema(guestInvitations).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertGuestInvitation = z.infer<typeof insertGuestInvitationSchema>;
-export type GuestInvitation = typeof guestInvitations.$inferSelect;
-
-// Teams Member Sync State — tracks per-project member sync configuration and status
-export const teamsMemberSyncState = pgTable("teams_member_sync_state", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  teamId: varchar("team_id", { length: 255 }).notNull(),
-  syncEnabled: boolean("sync_enabled").notNull().default(true),
-  autoAddMembers: boolean("auto_add_members").notNull().default(true),
-  autoRemoveMembers: boolean("auto_remove_members").notNull().default(false), // Conservative default
-  inviteGuestsAutomatically: boolean("invite_guests_automatically").notNull().default(false),
-  lastSyncAt: timestamp("last_sync_at"),
-  lastSyncStatus: text("last_sync_status"), // success, error, partial
-  lastSyncError: text("last_sync_error"),
-  membersAdded: integer("members_added").notNull().default(0),
-  membersRemoved: integer("members_removed").notNull().default(0),
-  guestsInvited: integer("guests_invited").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").default(sql`now()`),
-}, (table) => ({
-  uniqueProject: unique("uq_teams_member_sync_state_project").on(table.projectId),
-}));
-
-export const insertTeamsMemberSyncStateSchema = createInsertSchema(teamsMemberSyncState).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertTeamsMemberSyncState = z.infer<typeof insertTeamsMemberSyncStateSchema>;
-export type TeamsMemberSyncState = typeof teamsMemberSyncState.$inferSelect;
-
-// ============================================================================
-// MCP WRITE AUDIT (Phase 0 of Copilot Write Activities)
-// ============================================================================
-// Tracks every mutation that flows through /mcp/v1/* endpoints. Serves three
-// purposes:
-//   1. Idempotency replay: a POST with the same X-Idempotency-Key returns the
-//      cached response instead of re-executing, so a retrying Copilot agent
-//      never double-creates resources.
-//   2. Audit trail: every write is attributable to a user + tenant + endpoint.
-//   3. Forensics: requestHash lets us detect when a replayed key carries a
-//      different payload (treated as a 409 conflict).
-
-// ============================================================================
-// PROJECT SHAREPOINT STATUS REPORTS
-// ============================================================================
-
-export const projectStatusReports = pgTable("project_status_reports", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  tenantId: varchar("tenant_id").references(() => tenants.id),
-  reportPeriod: text("report_period").notNull(), // e.g. "2026-W16" or "Apr 14 – Apr 20, 2026"
-  ragStatus: varchar("rag_status", { length: 10 }).notNull().default("green"), // green, amber, red
-  accomplishments: text("accomplishments"),
-  milestones: text("milestones"),
-  risks: text("risks"),
-  notes: text("notes"),
-  sharepointPageId: text("sharepoint_page_id"),
-  sharepointPageUrl: text("sharepoint_page_url"),
-  publishedAt: timestamp("published_at").notNull().default(sql`now()`),
-  publishedBy: varchar("published_by").references(() => users.id),
-}, (table) => ({
-  projectIdx: index("idx_project_status_reports_project").on(table.projectId),
-  tenantIdx: index("idx_project_status_reports_tenant").on(table.tenantId),
-}));
-
-export const insertProjectStatusReportSchema = createInsertSchema(projectStatusReports).omit({
-  id: true,
-  publishedAt: true,
-});
-export type InsertProjectStatusReport = z.infer<typeof insertProjectStatusReportSchema>;
-export type ProjectStatusReport = typeof projectStatusReports.$inferSelect;
-
-export const mcpWriteAudit = pgTable("mcp_write_audit", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
-  userId: varchar("user_id").references(() => users.id).notNull(),
-  endpoint: text("endpoint").notNull(),          // e.g. "POST /mcp/v1/clients"
-  idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
-  requestHash: varchar("request_hash", { length: 64 }).notNull(),  // sha256 hex
-  responseStatus: integer("response_status").notNull(),
-  responseBody: jsonb("response_body"),
-  resourceType: varchar("resource_type", { length: 50 }),
-  resourceId: varchar("resource_id", { length: 255 }),
-  correlationId: varchar("correlation_id", { length: 64 }),
-  dryRun: boolean("dry_run").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-}, (table) => ({
-  uniqueTenantUserKey: uniqueIndex("uq_mcp_write_audit_tenant_user_key")
-    .on(table.tenantId, table.userId, table.idempotencyKey),
-  tenantIdx: index("idx_mcp_write_audit_tenant").on(table.tenantId),
-  createdIdx: index("idx_mcp_write_audit_created").on(table.createdAt),
-  resourceIdx: index("idx_mcp_write_audit_resource").on(table.resourceType, table.resourceId),
-}));
-
-export const insertMcpWriteAuditSchema = createInsertSchema(mcpWriteAudit).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertMcpWriteAudit = z.infer<typeof insertMcpWriteAuditSchema>;
-export type McpWriteAudit = typeof mcpWriteAudit.$inferSelect;
-
-// ============================================================================
-// AGENT CARD HEALTH CHECKS
+// AGENT CARD HEALTH CHECKS, PAGE VIEWS
 // ============================================================================
 
 export const agentCardHealthChecks = pgTable("agent_card_health_checks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  status: varchar("status", { length: 20 }).notNull(), // 'ok' | 'invalid' | 'error'
+  status: varchar("status", { length: 20 }).notNull(),
   checkedAt: timestamp("checked_at").notNull(),
   skillCount: integer("skill_count"),
   errors: jsonb("errors").$type<string[]>(),
   message: text("message"),
-  trigger: varchar("trigger", { length: 50 }).notNull().default("scheduled"), // 'scheduled' | 'startup' | 'admin-manual' | 'cron'
+  trigger: varchar("trigger", { length: 50 }).notNull().default("scheduled"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 }, (table) => ({
   checkedAtIdx: index("idx_agent_card_health_checks_checked_at").on(table.checkedAt),
 }));
-
-export const insertAgentCardHealthCheckSchema = createInsertSchema(agentCardHealthChecks).omit({
-  id: true,
-  createdAt: true,
-});
+export const insertAgentCardHealthCheckSchema = createInsertSchema(agentCardHealthChecks).omit({ id: true, createdAt: true });
 export type InsertAgentCardHealthCheck = z.infer<typeof insertAgentCardHealthCheckSchema>;
 export type AgentCardHealthCheck = typeof agentCardHealthChecks.$inferSelect;
 
+export const pageViews = pgTable("page_views", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  path: text("path").notNull(),
+  sessionId: text("session_id"),
+  referrer: text("referrer"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export const insertPageViewSchema = createInsertSchema(pageViews).omit({ id: true, createdAt: true });
+export type InsertPageView = z.infer<typeof insertPageViewSchema>;
+export type PageView = typeof pageViews.$inferSelect;
+
 // ============================================================================
-// TEAMS PROACTIVE ALERT LOG — deduplication and audit trail for Teams alerts
+// RELATIONS
 // ============================================================================
 
-export const teamsAlertLog = pgTable("teams_alert_log", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
-  triggerType: varchar("trigger_type", { length: 50 }).notNull(), // 'health', 'raidd', 'status_report'
-  projectId: varchar("project_id"),
-  entryId: varchar("entry_id"),
-  targetTeamId: varchar("target_team_id"),
-  targetChannelId: varchar("target_channel_id"),
-  alertedAt: timestamp("alerted_at").notNull().default(sql`now()`),
-  details: jsonb("details"),
-}, (table) => ({
-  tenantIdx: index("idx_teams_alert_log_tenant").on(table.tenantId),
-  tenantTriggerIdx: index("idx_teams_alert_log_tenant_trigger").on(table.tenantId, table.triggerType),
-  alertedAtIdx: index("idx_teams_alert_log_alerted_at").on(table.alertedAt),
+export const usersRelations = relations(users, ({ one, many }) => ({
+  primaryTenant: one(tenants, { fields: [users.primaryTenantId], references: [tenants.id] }),
+  memberships: many(tenantUsers),
 }));
 
-export const insertTeamsAlertLogSchema = createInsertSchema(teamsAlertLog).omit({
-  id: true,
-  alertedAt: true,
-});
-export type InsertTeamsAlertLog = z.infer<typeof insertTeamsAlertLogSchema>;
-export type TeamsAlertLog = typeof teamsAlertLog.$inferSelect;
+export const tenantsRelations = relations(tenants, ({ one, many }) => ({
+  servicePlan: one(servicePlans, { fields: [tenants.servicePlanId], references: [servicePlans.id] }),
+  members: many(tenantUsers),
+}));
+
+export const tenantUsersRelations = relations(tenantUsers, ({ one }) => ({
+  user: one(users, { fields: [tenantUsers.userId], references: [users.id] }),
+  tenant: one(tenants, { fields: [tenantUsers.tenantId], references: [tenants.id] }),
+}));
+
+export const groundingDocumentsRelations = relations(groundingDocuments, ({ one }) => ({
+  tenant: one(tenants, { fields: [groundingDocuments.tenantId], references: [tenants.id] }),
+  createdByUser: one(users, { fields: [groundingDocuments.createdBy], references: [users.id] }),
+  updatedByUser: one(users, { fields: [groundingDocuments.updatedBy], references: [users.id] }),
+}));
+
+export const supportTicketsRelations = relations(supportTickets, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [supportTickets.tenantId], references: [tenants.id] }),
+  user: one(users, { fields: [supportTickets.userId], references: [users.id] }),
+  assignee: one(users, { fields: [supportTickets.assignedTo], references: [users.id] }),
+  queue: one(supportQueues, { fields: [supportTickets.queueId], references: [supportQueues.id] }),
+  slaPolicy: one(supportSlaPolicies, { fields: [supportTickets.slaPolicyId], references: [supportSlaPolicies.id] }),
+  replies: many(supportTicketReplies),
+  watchers: many(supportTicketWatchers),
+  activity: many(supportTicketActivity),
+}));
+
+export const supportTicketRepliesRelations = relations(supportTicketReplies, ({ one }) => ({
+  ticket: one(supportTickets, { fields: [supportTicketReplies.ticketId], references: [supportTickets.id] }),
+  user: one(users, { fields: [supportTicketReplies.userId], references: [users.id] }),
+}));
