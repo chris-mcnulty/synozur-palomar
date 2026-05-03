@@ -31,7 +31,7 @@ import { SynozurAppSwitcher } from "@/components/synozur-app-switcher";
 import { Aurora } from "@/components/aurora";
 import heroImage from "@assets/Firefly_5c02a715-05d7-48e2-91d7-99c03988b690_1777808195121.jpeg";
 import secondaryImage from "@assets/AdobeStock_189127184_1771187213585.jpeg";
-import constellationLogoWhite from "@assets/Palomar_Logo_-_White_1773876279047.png";
+import constellationLogoWhite from "@assets/palomar-logo-white.svg";
 
 function trackPageView(path: string) {
   try {
