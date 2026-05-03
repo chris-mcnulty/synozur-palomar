@@ -9,7 +9,7 @@ import type {
   SupportEmailSubscription,
   InsertSupportEmailSubscription,
 } from "@shared/schema";
-import { storage } from "./index";
+import { storage } from "../storage";
 
 export interface ISupportEmailStorage {
   getSupportTicketRepliesWithMessageIds(ticketId: string): Promise<SupportTicketReply[]>;
