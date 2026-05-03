@@ -49,6 +49,9 @@ import Roadmap from "@/pages/roadmap";
 import Support from "@/pages/support";
 import PortalTicket from "@/pages/portal-ticket";
 import PortalLookup from "@/pages/portal-lookup";
+import PortalKb from "@/pages/portal-kb";
+import PortalKbArticle from "@/pages/portal-kb-article";
+import PortalNewTicket from "@/pages/portal-new-ticket";
 import Login from "@/pages/login";
 import Signup from "@/pages/signup";
 import FileRepository from "@/pages/file-repository";
@@ -146,7 +149,7 @@ function Router() {
   useEffect(() => {
     if (error && !user && !isLoading && !processingSession && !isRecovering) {
       const currentPath = window.location.pathname;
-      if (currentPath !== '/login' && currentPath !== '/signup' && !currentPath.startsWith('/embed/')) {
+      if (currentPath !== '/login' && currentPath !== '/signup' && !currentPath.startsWith('/embed/') && !currentPath.startsWith('/portal')) {
         const lastRedirect = sessionStorage.getItem('redirectAfterLogin');
         const redirectCount = parseInt(sessionStorage.getItem('redirectLoopCount') || '0', 10);
         if (lastRedirect === currentPath && redirectCount >= 2) {
@@ -188,6 +191,9 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
       <Route path="/portal" component={PortalLookup} />
+      <Route path="/portal/kb" component={PortalKb} />
+      <Route path="/portal/kb/:slug" component={PortalKbArticle} />
+      <Route path="/portal/new" component={PortalNewTicket} />
       <Route path="/portal/ticket/:token" component={PortalTicket} />
       <Route path="/">
         {user ? <Dashboard /> : <Redirect to="/login" />}

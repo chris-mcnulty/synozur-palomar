@@ -3168,6 +3168,7 @@ export const supportKbArticles = pgTable("support_kb_articles", {
   publishedAt: timestamp("published_at"),
   viewCount: integer("view_count").notNull().default(0),
   helpfulCount: integer("helpful_count").notNull().default(0),
+  notHelpfulCount: integer("not_helpful_count").notNull().default(0),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -3176,9 +3177,24 @@ export const supportKbArticles = pgTable("support_kb_articles", {
 }));
 export const insertSupportKbArticleSchema = createInsertSchema(supportKbArticles, {
   tags: z.array(z.string()).optional(),
-}).omit({ id: true, createdAt: true, updatedAt: true, viewCount: true, helpfulCount: true });
+}).omit({ id: true, createdAt: true, updatedAt: true, viewCount: true, helpfulCount: true, notHelpfulCount: true });
 export type InsertSupportKbArticle = z.infer<typeof insertSupportKbArticleSchema>;
 export type SupportKbArticle = typeof supportKbArticles.$inferSelect;
+
+// Lightweight portal/support analytics events (article views, deflection, etc.)
+export const supportEvents = pgTable("support_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  eventType: varchar("event_type", { length: 64 }).notNull(),
+  articleId: varchar("article_id"),
+  sessionId: varchar("session_id", { length: 128 }),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_events_tenant").on(table.tenantId),
+  typeIdx: index("idx_support_events_type").on(table.eventType),
+}));
+export type SupportEvent = typeof supportEvents.$inferSelect;
 
 // App Integration Keys (for SYNOZUR apps to file tickets via API)
 export const supportAppIntegrationKeys = pgTable("support_app_integration_keys", {

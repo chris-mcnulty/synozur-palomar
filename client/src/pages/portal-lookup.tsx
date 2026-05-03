@@ -1,19 +1,25 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { LifeBuoy, Loader2 } from "lucide-react";
+import { LifeBuoy, Loader2, BookOpen, Plus } from "lucide-react";
+import { Link } from "wouter";
 
 export default function PortalLookup() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const urlTenantId = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("tenantId") || "";
+  }, []);
   const [ticketNumber, setTicketNumber] = useState("");
   const [email, setEmail] = useState("");
-  const [tenantId, setTenantId] = useState("");
+  const [tenantId, setTenantId] = useState(urlTenantId);
   const [submitting, setSubmitting] = useState(false);
+  const tenantQs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,6 +53,10 @@ export default function PortalLookup() {
           <CardDescription>Find your ticket using its number and the email address you submitted it from.</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex gap-2 mb-4">
+            <Link href={`/portal/kb${tenantQs}`}><Button variant="outline" size="sm" className="flex-1" data-testid="link-kb"><BookOpen className="h-4 w-4 mr-1" /> Help Center</Button></Link>
+            <Link href={`/portal/new${tenantQs}`}><Button variant="outline" size="sm" className="flex-1" data-testid="link-new-ticket"><Plus className="h-4 w-4 mr-1" /> New ticket</Button></Link>
+          </div>
           <form onSubmit={onSubmit} className="space-y-4" data-testid="portal-lookup-form">
             <div>
               <Label htmlFor="ticketNumber">Ticket number</Label>

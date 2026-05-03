@@ -46,6 +46,8 @@ import {
   supportKbArticles,
   type SupportKbArticle,
   type InsertSupportKbArticle,
+  supportEvents,
+  type SupportEvent,
   supportAppIntegrationKeys,
   type SupportAppIntegrationKey,
   type InsertSupportAppIntegrationKey,
@@ -1389,6 +1391,38 @@ export const adminMethods: ThisType<IStorage & {
     await db.update(supportKbArticles)
       .set({ viewCount: sql`${supportKbArticles.viewCount} + 1` })
       .where(eq(supportKbArticles.id, id));
+  },
+  async recordKbArticleFeedback(id: string, helpful: boolean): Promise<void> {
+    if (helpful) {
+      await db.update(supportKbArticles)
+        .set({ helpfulCount: sql`${supportKbArticles.helpfulCount} + 1` })
+        .where(eq(supportKbArticles.id, id));
+    } else {
+      await db.update(supportKbArticles)
+        .set({ notHelpfulCount: sql`${supportKbArticles.notHelpfulCount} + 1` })
+        .where(eq(supportKbArticles.id, id));
+    }
+  },
+
+  // ===== Support Events (portal analytics, deflection) =====
+  async recordSupportEvent(e: {
+    tenantId: string;
+    eventType: string;
+    articleId?: string | null;
+    sessionId?: string | null;
+    metadata?: any;
+  }): Promise<SupportEvent> {
+    const [created] = await db.insert(supportEvents).values({
+      tenantId: e.tenantId,
+      eventType: e.eventType,
+      articleId: e.articleId || null,
+      sessionId: e.sessionId || null,
+      metadata: e.metadata || null,
+    }).returning();
+    return created;
+  },
+  async getAllTenants(): Promise<Tenant[]> {
+    return db.select().from(tenants);
   },
 
   // ===== App Integration Keys =====
