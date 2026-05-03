@@ -194,6 +194,20 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
     return res.json({ ok: true });
   });
 
+  // ===== KB Analytics =====
+  app.get("/api/support/kb-analytics", requireAuth, adminOnly, async (req, res) => {
+    const u = (req as any).user;
+    const isPlatform = u?.platformRole === 'global_admin' || u?.platformRole === 'constellation_admin' || u?.role === 'global_admin' || u?.role === 'constellation_admin';
+    const queryTenantId = (req.query.tenantId as string | undefined) || undefined;
+    const tenantId = (isPlatform && queryTenantId) ? queryTenantId : getTenantId(req);
+    if (!tenantId) {
+      if (isPlatform) return res.json({ windowDays: 30, totalDeflectionsThisMonth: 0, totalDeflectionsWindow: 0, articles: [] });
+      return res.status(400).json({ error: "No tenant" });
+    }
+    const windowDays = Math.max(1, Math.min(365, parseInt((req.query.windowDays as string) || "30", 10) || 30));
+    return res.json(await s.getSupportKbAnalytics(tenantId, windowDays));
+  });
+
   // ===== App Integration Keys (for SYNOZUR apps) =====
   app.get("/api/support/api-keys", requireAuth, adminOnly, async (req, res) => {
     const tenantId = getTenantId(req);
