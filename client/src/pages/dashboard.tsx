@@ -16,7 +16,7 @@ export default function Dashboard() {
             Welcome back{user?.name ? `, ${user.name}` : ""}
           </h1>
           <p className="text-muted-foreground">
-            Constellation — Consulting Delivery & Support Platform
+            Constellation — Multi-Tenant Support Platform
           </p>
         </div>
 

@@ -67,7 +67,7 @@ function Router() {
 
   useEffect(() => {
     const isDevelopment = import.meta.env.MODE === "development";
-    const baseTitle = "Constellation | Synozur Consulting Delivery Platform";
+    const baseTitle = "Constellation | Synozur Support Platform";
     document.title = isDevelopment ? `Development - ${baseTitle}` : baseTitle;
   }, []);
 
@@ -168,9 +168,6 @@ function Router() {
       <Route path="/user-guide">{user ? <UserGuide /> : <Redirect to="/login" />}</Route>
       <Route path="/changelog">{user ? <Changelog /> : <Redirect to="/login" />}</Route>
       <Route path="/roadmap">{user ? <Roadmap /> : <Redirect to="/login" />}</Route>
-      <Route path="/support/console">
-        {user ? <SupportStaffGuard><SupportConsole /></SupportStaffGuard> : <Redirect to="/login" />}
-      </Route>
       <Route path="/support/queues">
         {user ? (
           <PermissionGuard allowedRoles={["admin"]}>
