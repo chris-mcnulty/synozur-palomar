@@ -878,7 +878,22 @@ export const adminMethods: ThisType<IStorage & {
       .orderBy(desc(supportTickets.createdAt));
   },
 
-  async getAllSupportTickets(filters?: { status?: string | string[]; priority?: string; category?: string; tenantId?: string }): Promise<SupportTicket[]> {
+  async getAllSupportTickets(filters?: {
+    status?: string | string[];
+    priority?: string;
+    category?: string;
+    tenantId?: string;
+    assignedTo?: string;
+    unassigned?: boolean;
+    queueId?: string;
+    queueIds?: string[];
+    ticketType?: string;
+    search?: string;
+    breachingBefore?: Date;
+    breachingAfter?: Date;
+    updatedSince?: Date;
+    closedSince?: Date;
+  }): Promise<SupportTicket[]> {
     const conditions: SQL[] = [];
     if (filters?.status) {
       if (Array.isArray(filters.status)) {
@@ -890,6 +905,47 @@ export const adminMethods: ThisType<IStorage & {
     if (filters?.priority) conditions.push(eq(supportTickets.priority, filters.priority));
     if (filters?.category) conditions.push(eq(supportTickets.category, filters.category));
     if (filters?.tenantId) conditions.push(eq(supportTickets.tenantId, filters.tenantId));
+    if (filters?.assignedTo) conditions.push(eq(supportTickets.assignedTo, filters.assignedTo));
+    if (filters?.unassigned) conditions.push(isNull(supportTickets.assignedTo));
+    if (filters?.queueId) conditions.push(eq(supportTickets.queueId, filters.queueId));
+    if (filters?.queueIds) {
+      if (filters.queueIds.length === 0) {
+        // No member queues — return nothing rather than match everything.
+        conditions.push(sql`1 = 0`);
+      } else {
+        conditions.push(inArray(supportTickets.queueId, filters.queueIds));
+      }
+    }
+    if (filters?.ticketType) conditions.push(eq(supportTickets.ticketType, filters.ticketType));
+    if (filters?.search) {
+      const term = `%${filters.search}%`;
+      const searchCond = or(
+        ilike(supportTickets.subject, term),
+        ilike(supportTickets.description, term),
+      );
+      if (searchCond) conditions.push(searchCond);
+    }
+    if (filters?.breachingBefore) {
+      conditions.push(lte(supportTickets.resolutionDueAt, filters.breachingBefore));
+    }
+    if (filters?.breachingAfter) {
+      conditions.push(gte(supportTickets.resolutionDueAt, filters.breachingAfter));
+      conditions.push(isNotNull(supportTickets.resolutionDueAt));
+    }
+    if (filters?.breachingAfter) {
+      conditions.push(gte(supportTickets.resolutionDueAt, filters.breachingAfter));
+      conditions.push(isNotNull(supportTickets.resolutionDueAt));
+    }
+    if (filters?.updatedSince) {
+      conditions.push(gte(supportTickets.updatedAt, filters.updatedSince));
+    }
+    if (filters?.closedSince) {
+      const closedCond = or(
+        gte(supportTickets.closedAt, filters.closedSince),
+        gte(supportTickets.resolvedAt, filters.closedSince),
+      );
+      if (closedCond) conditions.push(closedCond);
+    }
 
     const query = conditions.length > 0
       ? db.select().from(supportTickets).where(and(...conditions))
@@ -1442,12 +1498,21 @@ export const adminMethods: ThisType<IStorage & {
   },
 
   // ===== KB Articles =====
-  async getSupportKbArticles(tenantId: string, opts?: { visibility?: string; published?: boolean; search?: string }): Promise<SupportKbArticle[]> {
+  async getSupportKbArticles(tenantId: string, opts?: { visibility?: string; published?: boolean; search?: string; limit?: number }): Promise<SupportKbArticle[]> {
     const conds: SQL[] = [eq(supportKbArticles.tenantId, tenantId)];
     if (opts?.visibility) conds.push(eq(supportKbArticles.visibility, opts.visibility));
     if (opts?.published) conds.push(isNotNull(supportKbArticles.publishedAt));
-    if (opts?.search) conds.push(ilike(supportKbArticles.title, `%${opts.search}%`));
-    return db.select().from(supportKbArticles).where(and(...conds)).orderBy(desc(supportKbArticles.updatedAt));
+    if (opts?.search) {
+      const term = `%${opts.search}%`;
+      const searchCond = or(
+        ilike(supportKbArticles.title, term),
+        ilike(supportKbArticles.summary, term),
+        ilike(supportKbArticles.body, term),
+      );
+      if (searchCond) conds.push(searchCond);
+    }
+    const q = db.select().from(supportKbArticles).where(and(...conds)).orderBy(desc(supportKbArticles.updatedAt));
+    return opts?.limit && opts.limit > 0 ? q.limit(opts.limit) : q;
   },
   async getSupportKbArticleBySlug(tenantId: string, slug: string): Promise<SupportKbArticle | undefined> {
     const [a] = await db.select().from(supportKbArticles)

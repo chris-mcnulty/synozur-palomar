@@ -40,8 +40,16 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
   // ===== Queues =====
   app.get("/api/support/queues", requireAuth, async (req, res) => {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "No tenant" });
+    const u = (req as any).user;
+    const isPlatform = u?.platformRole === 'global_admin' || u?.platformRole === 'constellation_admin' || u?.role === 'global_admin' || u?.role === 'constellation_admin';
+    const queryTenantId = (req.query.tenantId as string | undefined) || undefined;
+    const tenantId = (isPlatform && queryTenantId) ? queryTenantId : getTenantId(req);
+    if (!tenantId) {
+      // Platform admins without a tenant context get an empty list rather
+      // than 400, so the support console renders for them.
+      if (isPlatform) return res.json([]);
+      return res.status(400).json({ error: "No tenant" });
+    }
     return res.json(await s.getSupportQueues(tenantId));
   });
 
@@ -105,11 +113,20 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
   // ===== Knowledge Base =====
   app.get("/api/support/kb", requireAuth, async (req, res) => {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "No tenant" });
+    const u = (req as any).user;
+    const isPlatform = u?.platformRole === 'global_admin' || u?.platformRole === 'constellation_admin' || u?.role === 'global_admin' || u?.role === 'constellation_admin';
+    const queryTenantId = (req.query.tenantId as string | undefined) || undefined;
+    const tenantId = (isPlatform && queryTenantId) ? queryTenantId : getTenantId(req);
+    if (!tenantId) {
+      if (isPlatform) return res.json([]);
+      return res.status(400).json({ error: "No tenant" });
+    }
     const visibility = (req.query.visibility as string | undefined) || undefined;
     const search = (req.query.q as string | undefined) || undefined;
-    return res.json(await s.getSupportKbArticles(tenantId, { visibility, search }));
+    const published = req.query.published === 'true' ? true : undefined;
+    const limitRaw = req.query.limit as string | undefined;
+    const limit = limitRaw ? Math.max(1, Math.min(50, parseInt(limitRaw, 10) || 0)) : undefined;
+    return res.json(await s.getSupportKbArticles(tenantId, { visibility, search, published, limit }));
   });
 
   app.get("/api/support/kb/:id", requireAuth, async (req, res) => {

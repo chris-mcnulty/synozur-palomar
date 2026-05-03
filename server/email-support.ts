@@ -145,6 +145,45 @@ export async function sendExternalTicketConfirmation(
   await client.send(msg);
 }
 
+export async function sendSupportTicketReplyNotification(
+  ticket: SupportTicket,
+  recipient: { email: string; firstName?: string | null; lastName?: string | null },
+  reply: { message: string; authorName?: string | null },
+) {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const portalUrl = buildPortalUrl(ticket);
+  const name = `${recipient.firstName || ''} ${recipient.lastName || ''}`.trim() || recipient.email;
+  const author = reply.authorName?.trim() || "Support";
+  const safeMessage = reply.message
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br/>');
+  const msg = {
+    to: recipient.email,
+    from: fromEmail,
+    subject: `[Constellation Support] New reply on ticket #${ticket.ticketNumber}: ${ticket.subject}`,
+    html: `
+      <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background:#1d4ed8;color:#fff;padding:20px;">
+          <h2 style="margin:0;">Ticket #${ticket.ticketNumber}</h2>
+          <div style="opacity:.85;font-size:13px;">${ticket.subject}</div>
+        </div>
+        <div style="padding:20px;background:#fff;">
+          <p>Hi ${name},</p>
+          <p><strong>${author}</strong> replied to your ticket:</p>
+          <blockquote style="border-left:3px solid #1d4ed8;padding:10px 14px;margin:12px 0;background:#f8fafc;color:#111;">
+            ${safeMessage}
+          </blockquote>
+          <p><a href="${portalUrl}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open ticket</a></p>
+          <p style="color:#666;font-size:12px;">You can reply directly from the portal.</p>
+        </div>
+      </div>
+    `,
+  };
+  await client.send(msg);
+}
+
 export async function sendSupportTicketNotification(
   ticket: SupportTicket,
   user: { email: string; firstName?: string | null; lastName?: string | null }

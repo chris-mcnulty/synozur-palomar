@@ -47,6 +47,7 @@ import UserGuide from "@/pages/user-guide";
 import Changelog from "@/pages/changelog";
 import Roadmap from "@/pages/roadmap";
 import Support from "@/pages/support";
+import SupportConsole from "@/pages/support-console";
 import PortalTicket from "@/pages/portal-ticket";
 import PortalLookup from "@/pages/portal-lookup";
 import PortalKb from "@/pages/portal-kb";
@@ -98,6 +99,15 @@ function PlatformAdminGuard({ children }: { children: React.ReactNode }) {
     return <Redirect to="/dashboard" />;
   }
   
+  return <>{children}</>;
+}
+
+// Permission wrapper for support-staff routes (platform admins or tenant admins)
+function SupportStaffGuard({ children }: { children: React.ReactNode }) {
+  const { isPlatformAdmin, hasAnyRole } = useAuth();
+  if (!isPlatformAdmin && !hasAnyRole(['admin', 'billing-admin'])) {
+    return <Redirect to="/support" />;
+  }
   return <>{children}</>;
 }
 
@@ -442,6 +452,9 @@ function Router() {
       </Route>
       <Route path="/roadmap">
         {user ? <Roadmap /> : <Redirect to="/login" />}
+      </Route>
+      <Route path="/support/console">
+        {user ? <SupportStaffGuard><SupportConsole /></SupportStaffGuard> : <Redirect to="/login" />}
       </Route>
       <Route path="/support">
         {user ? <Support /> : <Redirect to="/login" />}
