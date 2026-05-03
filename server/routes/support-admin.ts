@@ -356,7 +356,7 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
       const ownerTenantId = tenantId!; // already set above
 
       const {
-        findReplyToToken, normalizeMessageId, isBounceOrAutoReply,
+        findReplyToToken, normalizeMessageId, isBounceOrAutoReply, stripQuotedReply,
       } = await import("../email-support");
 
       // 1) Bounce / autoresponder filter — log and skip silently with 200 so
@@ -441,10 +441,13 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
       // 3) Append-as-reply path
       if (ticket) {
+        const rawBody = data.text || "";
+        const trimmedBody = stripQuotedReply(rawBody);
         const replyInput: InsertSupportTicketReply = {
           ticketId: ticket.id,
           userId: null,
-          message: data.text || "(empty body)",
+          message: trimmedBody || "(empty body)",
+          rawMessage: rawBody && rawBody !== trimmedBody ? rawBody : null,
           isInternal: false,
           messageId: normalizeMessageId(data.messageId ?? null),
           inReplyTo: inReplyToNorm,
@@ -494,10 +497,13 @@ export function registerSupportAdminRoutes(app: Express, deps: Deps) {
 
       // Persist the inbound message itself as the seed reply so future replies
       // can chain via In-Reply-To.
+      const seedRaw = data.text || "";
+      const seedTrimmed = stripQuotedReply(seedRaw);
       const seedReplyInput: InsertSupportTicketReply = {
         ticketId: created.id,
         userId: null,
-        message: data.text || "(empty body)",
+        message: seedTrimmed || "(empty body)",
+        rawMessage: seedRaw && seedRaw !== seedTrimmed ? seedRaw : null,
         isInternal: true, // seed copy mirrors the description; keep internal
         messageId: normalizeMessageId(data.messageId ?? null),
         source: "email",

@@ -520,6 +520,9 @@ export const supportTicketReplies = pgTable("support_ticket_replies", {
   ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
   userId: varchar("user_id").references(() => users.id, { onDelete: 'set null' }),
   message: text("message").notNull(),
+  // Full unmodified body (with quoted history / signatures) for inbound email replies.
+  // `message` may be a trimmed version of this for readability in the timeline.
+  rawMessage: text("raw_message"),
   isInternal: boolean("is_internal").default(false),
   // RFC 5322 message identifiers for reliable email threading.
   // messageId is the Message-ID header of the email we sent or received for this reply.

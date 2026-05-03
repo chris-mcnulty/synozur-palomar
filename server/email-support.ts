@@ -116,6 +116,86 @@ export function isBounceOrAutoReply(input: {
 }
 
 /**
+ * Strip quoted reply history and common signature delimiters from an inbound
+ * email body so the ticket timeline shows just the new content the requester
+ * typed. Conservative: when no clear quoted region is found, returns the
+ * original text unchanged. The caller is expected to keep the unmodified body
+ * elsewhere (e.g. on the reply's `rawMessage` column) for audit.
+ *
+ * Handles common patterns from Outlook, Gmail, and Apple Mail:
+ *   - Lines beginning with ">" (RFC 3676 quoting)
+ *   - "On <date…>, <name> wrote:" intro lines (Gmail / Apple Mail)
+ *   - "From: …\nSent: …\nTo: …\nSubject: …" header blocks (Outlook)
+ *   - "-----Original Message-----" delimiters (Outlook / older clients)
+ *   - "_____" horizontal rule blocks (Outlook web)
+ *   - Signature delimiter "-- " (RFC 3676)
+ */
+export function stripQuotedReply(body: string | null | undefined): string {
+  if (!body) return "";
+  const normalized = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+
+  // Patterns that mark the start of a quoted/forwarded region.
+  // We trim each line before testing so leading whitespace/non-breaking spaces
+  // (common in HTML→text conversions) don't defeat the match.
+  const quoteIntroPatterns: RegExp[] = [
+    // Gmail / Apple Mail: "On Tue, Jan 2, 2024 at 3:45 PM, Foo <foo@bar> wrote:"
+    // Also handles localized variants where "wrote:" might be missing if it
+    // wraps to the next line, by allowing an open-ended "On … <email…>" form.
+    /^On .{1,200}\bwrote:\s*$/i,
+    /^On .{1,200}<[^>]+@[^>]+>\s*:?\s*$/i,
+    // Outlook: "-----Original Message-----" / "-----Forwarded Message-----"
+    /^-{2,}\s*(Original|Forwarded) Message\s*-{2,}\s*$/i,
+    // Outlook web horizontal rule before quoted block.
+    /^_{5,}\s*$/,
+    // Outlook header block start.
+    /^From:\s*.+/i,
+    // Apple Mail "Begin forwarded message:"
+    /^Begin forwarded message:\s*$/i,
+  ];
+
+  let cutIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (quoteIntroPatterns.some(p => p.test(trimmed))) {
+      cutIndex = i;
+      break;
+    }
+    // A run of ">"-quoted lines also marks the quoted region. Require the
+    // first quoted line to follow at least one non-quoted line so we don't
+    // truncate a body that legitimately starts with ">".
+    if (/^>/.test(trimmed) && i > 0) {
+      cutIndex = i;
+      break;
+    }
+  }
+
+  let trimmedLines = cutIndex >= 0 ? lines.slice(0, cutIndex) : lines.slice();
+
+  // Drop a trailing signature block delimited by "-- " (RFC 3676). Only
+  // applied when we still have content above it.
+  for (let i = 0; i < trimmedLines.length; i++) {
+    if (trimmedLines[i].trim() === "--" || trimmedLines[i] === "-- ") {
+      if (i > 0) trimmedLines = trimmedLines.slice(0, i);
+      break;
+    }
+  }
+
+  // Collapse trailing blank lines.
+  while (trimmedLines.length && trimmedLines[trimmedLines.length - 1].trim() === "") {
+    trimmedLines.pop();
+  }
+
+  const result = trimmedLines.join("\n").trim();
+  // Safety net: if stripping produced an empty body but the original had
+  // content, fall back to the original so the timeline doesn't show "(empty
+  // body)" for what was really a short reply.
+  if (!result && normalized.trim()) return normalized.trim();
+  return result;
+}
+
+/**
  * Resolve tenant-branding bits used by outbound mail templates. Best-effort —
  * if the tenant lookup fails, we fall back to platform defaults.
  */
