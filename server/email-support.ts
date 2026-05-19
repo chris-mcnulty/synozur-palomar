@@ -1,4 +1,5 @@
 import { getUncachableSendGridClient } from "./services/sendgrid-client";
+import { escapeHtml, escapeHtmlMultiline } from "./lib/html-escape";
 import type { SupportTicket, SupportTicketReply } from "@shared/schema";
 import crypto from "crypto";
 
@@ -228,14 +229,16 @@ async function getTenantBranding(tenantId: string | null | undefined): Promise<{
 
 function brandingHeaderHtml(name: string | null, color: string, logoUrl: string | null, ticketNumber: number, application: string | null) {
   const display = name || "Support";
+  const safeDisplay = escapeHtml(display);
   const logo = logoUrl
-    ? `<img src="${logoUrl}" alt="${display}" style="max-height:32px;display:block;margin-bottom:8px;">`
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${safeDisplay}" style="max-height:32px;display:block;margin-bottom:8px;">`
     : "";
+  const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : "#1d4ed8";
   return `
-    <div style="background: ${color}; color: #fff; padding: 24px;">
+    <div style="background: ${safeColor}; color: #fff; padding: 24px;">
       ${logo}
-      <h2 style="margin:0;">${display} ticket #${ticketNumber}</h2>
-      ${application ? `<div style="opacity:.85; font-size:13px;">${application}</div>` : ""}
+      <h2 style="margin:0;">${safeDisplay} ticket #${ticketNumber}</h2>
+      ${application ? `<div style="opacity:.85; font-size:13px;">${escapeHtml(application)}</div>` : ""}
     </div>
   `;
 }
@@ -250,6 +253,7 @@ export async function sendExternalTicketConfirmation(
   const fromEmail = brand.fromEmail || defaultFromEmail;
   const fromName = brand.fromName || (brand.name ? `${brand.name} Support` : "Synozur Support");
   const name = requester.name || "there";
+  const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(brand.primaryColor) ? brand.primaryColor : "#1d4ed8";
   const msg = {
     to: requester.email,
     from: { email: fromEmail, name: fromName },
@@ -258,10 +262,10 @@ export async function sendExternalTicketConfirmation(
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         ${brandingHeaderHtml(brand.name, brand.primaryColor, brand.logoUrl, ticket.ticketNumber, ticket.applicationSource)}
         <div style="padding: 20px; background: #fff;">
-          <p>Hi ${name},</p>
-          <p>We've received your request. Subject: <strong>${ticket.subject}</strong></p>
+          <p>Hi ${escapeHtml(name)},</p>
+          <p>We've received your request. Subject: <strong>${escapeHtml(ticket.subject)}</strong></p>
           <p>You can view the status, add comments, and provide feedback at any time:</p>
-          <p><a href="${portalUrl}" style="display:inline-block;background:${brand.primaryColor};color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open your ticket portal</a></p>
+          <p><a href="${escapeHtml(portalUrl)}" style="display:inline-block;background:${safeColor};color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open your ticket portal</a></p>
           <p style="color:#666;font-size:12px;">This link is private — keep it like a password. You'll get more email when our team responds.</p>
         </div>
       </div>
@@ -279,11 +283,7 @@ export async function sendSupportTicketReplyNotification(
   const portalUrl = buildPortalUrl(ticket);
   const name = `${recipient.firstName || ''} ${recipient.lastName || ''}`.trim() || recipient.email;
   const author = reply.authorName?.trim() || "Support";
-  const safeMessage = reply.message
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\n/g, '<br/>');
+  const safeMessage = escapeHtmlMultiline(reply.message);
   const msg = {
     to: recipient.email,
     from: fromEmail,
@@ -292,15 +292,15 @@ export async function sendSupportTicketReplyNotification(
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background:#1d4ed8;color:#fff;padding:20px;">
           <h2 style="margin:0;">Ticket #${ticket.ticketNumber}</h2>
-          <div style="opacity:.85;font-size:13px;">${ticket.subject}</div>
+          <div style="opacity:.85;font-size:13px;">${escapeHtml(ticket.subject)}</div>
         </div>
         <div style="padding:20px;background:#fff;">
-          <p>Hi ${name},</p>
-          <p><strong>${author}</strong> replied to your ticket:</p>
+          <p>Hi ${escapeHtml(name)},</p>
+          <p><strong>${escapeHtml(author)}</strong> replied to your ticket:</p>
           <blockquote style="border-left:3px solid #1d4ed8;padding:10px 14px;margin:12px 0;background:#f8fafc;color:#111;">
             ${safeMessage}
           </blockquote>
-          <p><a href="${portalUrl}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open ticket</a></p>
+          <p><a href="${escapeHtml(portalUrl)}" style="display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;">Open ticket</a></p>
           <p style="color:#666;font-size:12px;">You can reply directly from the portal.</p>
         </div>
       </div>
@@ -316,6 +316,10 @@ export async function sendSupportTicketNotification(
   const { client, fromEmail } = await getUncachableSendGridClient();
   const userName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email;
 
+  const priorityBg = ticket.priority === 'high' || ticket.priority === 'critical' ? '#dc2626'
+    : ticket.priority === 'medium' ? '#d97706'
+    : '#2563eb';
+  const safeCategory = escapeHtml((ticket.category || '').replace('_', ' '));
   const msg = {
     to: SUPPORT_NOTIFICATION_EMAIL,
     from: fromEmail,
@@ -330,20 +334,20 @@ export async function sendSupportTicketNotification(
               <td style="padding: 40px 20px;">
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #1a1a1a; border-radius: 12px; overflow: hidden;">
                   <tr>
-                    <td style="padding: 30px 40px; background: ${ticket.priority === 'high' ? '#dc2626' : ticket.priority === 'medium' ? '#d97706' : '#2563eb'};">
+                    <td style="padding: 30px 40px; background: ${priorityBg};">
                       <h1 style="margin: 0; font-size: 20px; color: #ffffff;">New Support Ticket #${ticket.ticketNumber}</h1>
-                      <p style="margin: 5px 0 0; font-size: 14px; color: rgba(255,255,255,0.8);">${(ticket.priority || 'medium').toUpperCase()} priority ${ticket.category.replace('_', ' ')}</p>
+                      <p style="margin: 5px 0 0; font-size: 14px; color: rgba(255,255,255,0.8);">${escapeHtml((ticket.priority || 'medium').toUpperCase())} priority ${safeCategory}</p>
                     </td>
                   </tr>
                   <tr>
                     <td style="padding: 30px 40px;">
                       <table style="width: 100%; border-collapse: collapse; margin: 0 0 20px;">
                         <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">Application</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">Palomar</td></tr>
-                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">User</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">${userName} (${user.email})</td></tr>
-                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888;">Subject</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0;">${ticket.subject}</td></tr>
+                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888; border-bottom: 1px solid #333;">User</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0; border-bottom: 1px solid #333;">${escapeHtml(userName)} (${escapeHtml(user.email)})</td></tr>
+                        <tr><td style="padding: 8px 12px; font-size: 13px; color: #888;">Subject</td><td style="padding: 8px 12px; font-size: 13px; color: #e0e0e0;">${escapeHtml(ticket.subject)}</td></tr>
                       </table>
                       <div style="padding: 16px; background: #111; border-radius: 8px; margin: 0 0 20px;">
-                        <p style="margin: 0; font-size: 13px; color: #ccc; white-space: pre-wrap;">${ticket.description}</p>
+                        <p style="margin: 0; font-size: 13px; color: #ccc; white-space: pre-wrap;">${escapeHtml(ticket.description)}</p>
                       </div>
                       <a href="${APP_URL}/support" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View in Palomar</a>
                     </td>
@@ -383,8 +387,8 @@ export async function sendSlaBreachEscalation(
     : `${details.overdueMinutes}m`;
   const deepLink = `${APP_URL}/support?ticketId=${ticket.id}`;
   const bumpRow = details.priorityBumpedTo
-    ? `<tr><td style="padding:6px 12px;font-size:13px;color:#888;">Priority</td><td style="padding:6px 12px;font-size:13px;color:#dc2626;font-weight:600;">Bumped to ${details.priorityBumpedTo.toUpperCase()}</td></tr>`
-    : `<tr><td style="padding:6px 12px;font-size:13px;color:#888;">Priority</td><td style="padding:6px 12px;font-size:13px;color:#333;">${(ticket.priority || 'medium').toUpperCase()}</td></tr>`;
+    ? `<tr><td style="padding:6px 12px;font-size:13px;color:#888;">Priority</td><td style="padding:6px 12px;font-size:13px;color:#dc2626;font-weight:600;">Bumped to ${escapeHtml(details.priorityBumpedTo.toUpperCase())}</td></tr>`
+    : `<tr><td style="padding:6px 12px;font-size:13px;color:#888;">Priority</td><td style="padding:6px 12px;font-size:13px;color:#333;">${escapeHtml((ticket.priority || 'medium').toUpperCase())}</td></tr>`;
   const msg = {
     to: primary,
     bcc,
@@ -398,9 +402,9 @@ export async function sendSlaBreachEscalation(
         </div>
         <div style="padding:20px;background:#fff;">
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
-            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Subject</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${ticket.subject}</td></tr>
-            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Requester</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${details.requesterEmail || '—'}</td></tr>
-            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Queue</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${details.queueName || '—'}</td></tr>
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Subject</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${escapeHtml(ticket.subject)}</td></tr>
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Requester</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${escapeHtml(details.requesterEmail || '—')}</td></tr>
+            <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Queue</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${escapeHtml(details.queueName || '—')}</td></tr>
             <tr><td style="padding:6px 12px;font-size:13px;color:#888;border-bottom:1px solid #eee;">Age</td><td style="padding:6px 12px;font-size:13px;color:#333;border-bottom:1px solid #eee;">${ageStr}</td></tr>
             ${bumpRow}
           </table>
@@ -440,13 +444,13 @@ export async function sendTicketConfirmationToSubmitter(
                   </tr>
                   <tr>
                     <td style="padding: 30px 40px;">
-                      <p style="margin: 0 0 16px; font-size: 14px; color: #333;">Hi ${userName},</p>
+                      <p style="margin: 0 0 16px; font-size: 14px; color: #333;">Hi ${escapeHtml(userName)},</p>
                       <p style="margin: 0 0 16px; font-size: 14px; color: #333;">Thank you for reaching out. We've received your support ticket and our team will review it shortly.</p>
                       <table style="width: 100%; border-collapse: collapse; margin: 0 0 20px; background: #f9fafb; border-radius: 8px;">
                         <tr><td style="padding: 10px 14px; font-size: 13px; color: #666; border-bottom: 1px solid #e5e7eb;">Ticket #</td><td style="padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #e5e7eb; font-weight: 600;">${ticket.ticketNumber}</td></tr>
-                        <tr><td style="padding: 10px 14px; font-size: 13px; color: #666; border-bottom: 1px solid #e5e7eb;">Subject</td><td style="padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #e5e7eb;">${ticket.subject}</td></tr>
-                        <tr><td style="padding: 10px 14px; font-size: 13px; color: #666; border-bottom: 1px solid #e5e7eb;">Category</td><td style="padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #e5e7eb;">${ticket.category.replace('_', ' ')}</td></tr>
-                        <tr><td style="padding: 10px 14px; font-size: 13px; color: #666;">Priority</td><td style="padding: 10px 14px; font-size: 13px; color: #333;">${(ticket.priority || 'medium').charAt(0).toUpperCase() + (ticket.priority || 'medium').slice(1)}</td></tr>
+                        <tr><td style="padding: 10px 14px; font-size: 13px; color: #666; border-bottom: 1px solid #e5e7eb;">Subject</td><td style="padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #e5e7eb;">${escapeHtml(ticket.subject)}</td></tr>
+                        <tr><td style="padding: 10px 14px; font-size: 13px; color: #666; border-bottom: 1px solid #e5e7eb;">Category</td><td style="padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #e5e7eb;">${escapeHtml((ticket.category || '').replace('_', ' '))}</td></tr>
+                        <tr><td style="padding: 10px 14px; font-size: 13px; color: #666;">Priority</td><td style="padding: 10px 14px; font-size: 13px; color: #333;">${escapeHtml((ticket.priority || 'medium').charAt(0).toUpperCase() + (ticket.priority || 'medium').slice(1))}</td></tr>
                       </table>
                       <p style="margin: 0 0 20px; font-size: 14px; color: #333;">You can track your ticket status and add updates anytime:</p>
                       <a href="${buildPortalUrl(ticket)}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 14px;">View Your Ticket</a>
@@ -516,13 +520,11 @@ export async function sendStaffReplyEmail(input: StaffReplyEmailInput): Promise<
   const brand = await getTenantBranding(input.ticket.tenantId);
   const primaryColor = brand.primaryColor;
   const logoHtml = brand.logoUrl
-    ? `<img src="${brand.logoUrl}" alt="${input.tenantName || brand.name || "Support"}" style="max-height:24px;display:block;margin-bottom:6px;">`
+    ? `<img src="${escapeHtml(brand.logoUrl)}" alt="${escapeHtml(input.tenantName || brand.name || "Support")}" style="max-height:24px;display:block;margin-bottom:6px;">`
     : "";
   const safeBody = input.reply.message.replace(/\r\n/g, "\n");
-  const htmlBody = safeBody
-    .split("\n")
-    .map(line => line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"))
-    .join("<br>");
+  const htmlBody = escapeHtmlMultiline(safeBody);
+  const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(primaryColor) ? primaryColor : "#1d4ed8";
 
   const headers: Record<string, string> = { "Message-ID": messageId };
   if (inReplyTo) headers["In-Reply-To"] = inReplyTo;
@@ -546,17 +548,17 @@ export async function sendStaffReplyEmail(input: StaffReplyEmailInput): Promise<
     headers,
     html: `
       <div style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 640px; margin: 0 auto;">
-        <div style="padding: 16px 20px; background: ${primaryColor}; color: #fff;">
+        <div style="padding: 16px 20px; background: ${safeColor}; color: #fff;">
           ${logoHtml}<strong>Ticket #${input.ticket.ticketNumber}</strong>
-          <span style="opacity:.85;"> &middot; ${input.ticket.subject}</span>
+          <span style="opacity:.85;"> &middot; ${escapeHtml(input.ticket.subject)}</span>
         </div>
         <div style="padding: 20px; background: #fff; color: #1f2937; line-height:1.5; font-size:14px;">
-          <div style="margin-bottom:8px;color:#374151;"><strong>${input.staffName}</strong> replied:</div>
+          <div style="margin-bottom:8px;color:#374151;"><strong>${escapeHtml(input.staffName)}</strong> replied:</div>
           <div style="white-space:pre-wrap;">${htmlBody}</div>
           <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
           <div style="font-size:12px;color:#6b7280;">
             Reply directly to this email to update your ticket, or
-            <a href="${portalUrl}" style="color:${primaryColor};">open the ticket portal</a>.
+            <a href="${escapeHtml(portalUrl)}" style="color:${safeColor};">open the ticket portal</a>.
           </div>
         </div>
       </div>

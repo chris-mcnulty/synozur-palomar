@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction, type Express } from "express";
 import { createServer, type Server } from "http";
 import compression from "compression";
+import helmet from "helmet";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
@@ -13,6 +14,20 @@ app.use(
       if (req.headers["x-no-compression"]) return false;
       return compression.filter(req, res);
     },
+  }),
+);
+
+// Security headers via helmet. CSP is intentionally disabled here because:
+// (1) the embed routes need their own frame-ancestors policy (set below),
+// (2) the Vite dev server requires inline scripts/styles, and
+// (3) a global CSP across the existing app surface would require a broader
+// audit to enforce safely. The remaining helmet defaults (HSTS, no-sniff,
+// frame-options, referrer-policy, etc.) provide the bulk of the protection.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
   }),
 );
 
@@ -145,6 +160,16 @@ process.on("uncaughtException", (error) => {
       log("✅ Support FTS objects ensured");
     } catch (ftsError: any) {
       log(`⚠️ Support FTS migration failed: ${ftsError.message}`);
+    }
+
+    // Ensure Wave 1 tables (notifications, audit_log, scheduled_job_runs) exist.
+    // Idempotent and safe to run on every boot.
+    try {
+      const { ensureWave1Objects } = await import("./lib/wave1-migration.js");
+      await ensureWave1Objects();
+      log("✅ Wave 1 objects ensured (notifications, audit_log, scheduled_job_runs)");
+    } catch (w1Error: any) {
+      log(`⚠️ Wave 1 migration failed: ${w1Error.message}`);
     }
 
     setupAdditionalServices(app, server, envValid).catch((error) => {

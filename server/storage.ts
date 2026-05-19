@@ -7,6 +7,7 @@ import {
   supportTicketWatchers, supportTicketActivity,
   supportSavedFilters,
   agentCardHealthChecks,
+  scheduledJobRuns,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type BlockedDomain, type InsertBlockedDomain,
@@ -24,6 +25,7 @@ import {
   type SupportTicketActivity, type InsertSupportTicketActivity,
   type SupportSavedFilter, type InsertSupportSavedFilter,
   type AgentCardHealthCheck, type InsertAgentCardHealthCheck,
+  type ScheduledJobRun, type InsertScheduledJobRun,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, ne, and, or, desc, asc, sql, ilike, isNotNull, isNull, inArray, gte, lte, type SQL } from "drizzle-orm";
@@ -160,6 +162,12 @@ export interface IStorage {
   addAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck>;
   getAgentCardHealthChecks(limit?: number): Promise<AgentCardHealthCheck[]>;
   pruneAgentCardHealthHistory(olderThanDays: number): Promise<number>;
+
+  // Scheduled job runs (telemetry + heartbeat)
+  createScheduledJobRun(run: Partial<InsertScheduledJobRun>): Promise<ScheduledJobRun>;
+  updateScheduledJobRun(id: string, updates: Partial<ScheduledJobRun>): Promise<ScheduledJobRun>;
+  getLastScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined>;
+  getLastSuccessfulScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined>;
 }
 
 export class DbStorage implements IStorage {
@@ -1006,6 +1014,53 @@ export class DbStorage implements IStorage {
       .where(lte(agentCardHealthChecks.checkedAt, cutoff))
       .returning({ id: agentCardHealthChecks.id });
     return result.length;
+  }
+
+  // ==================== Scheduled Job Runs ====================
+  async createScheduledJobRun(run: Partial<InsertScheduledJobRun>): Promise<ScheduledJobRun> {
+    if (!run.jobType) throw new Error("createScheduledJobRun requires jobType");
+    if (!run.status) throw new Error("createScheduledJobRun requires status");
+    if (!run.triggeredBy) throw new Error("createScheduledJobRun requires triggeredBy");
+    const [created] = await db.insert(scheduledJobRuns).values({
+      tenantId: run.tenantId ?? null,
+      jobType: run.jobType,
+      status: run.status,
+      triggeredBy: run.triggeredBy,
+      triggeredByUserId: run.triggeredByUserId ?? null,
+      resultSummary: (run.resultSummary as any) ?? null,
+      errorMessage: run.errorMessage ?? null,
+      completedAt: run.completedAt ?? null,
+    }).returning();
+    return created;
+  }
+
+  async updateScheduledJobRun(id: string, updates: Partial<ScheduledJobRun>): Promise<ScheduledJobRun> {
+    const patch: Record<string, unknown> = {};
+    if (updates.status !== undefined) patch.status = updates.status;
+    if (updates.completedAt !== undefined) patch.completedAt = updates.completedAt;
+    if (updates.resultSummary !== undefined) patch.resultSummary = updates.resultSummary as any;
+    if (updates.errorMessage !== undefined) patch.errorMessage = updates.errorMessage;
+    const [updated] = await db.update(scheduledJobRuns)
+      .set(patch as any)
+      .where(eq(scheduledJobRuns.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getLastScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db.select().from(scheduledJobRuns)
+      .where(eq(scheduledJobRuns.jobType, jobType))
+      .orderBy(desc(scheduledJobRuns.startedAt))
+      .limit(1);
+    return row;
+  }
+
+  async getLastSuccessfulScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db.select().from(scheduledJobRuns)
+      .where(and(eq(scheduledJobRuns.jobType, jobType), eq(scheduledJobRuns.status, 'completed')))
+      .orderBy(desc(scheduledJobRuns.startedAt))
+      .limit(1);
+    return row;
   }
 }
 

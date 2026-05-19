@@ -5,6 +5,9 @@ import { storage } from "../storage";
 import { supportEmailStorage } from "../storage/support-email-types";
 import { TICKET_CATEGORIES, TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES } from "@shared/schema";
 import type { InsertSupportTicketReply, SupportTicketReply, SupportTicketWatcher, SupportQueue, SupportTicket } from "@shared/schema";
+import { escapeHtml } from "../lib/html-escape";
+import { recordAudit } from "../lib/audit";
+import { notifyUser } from "../lib/notifications";
 
 const s = storage as any;
 
@@ -135,9 +138,48 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       } catch (e) { /* non-fatal */ }
       try { await s.logSupportTicketActivity({ ticketId: ticket.id, actorUserId: user.id, action: 'created' }); } catch {}
 
+      // Immutable audit trail for ticket creation.
+      await recordAudit({
+        tenantId,
+        actorUserId: user.id,
+        actorIp: req.ip || null,
+        action: 'support_ticket.created',
+        resourceType: 'support_ticket',
+        resourceId: ticket.id,
+        metadata: {
+          ticketNumber: ticket.ticketNumber,
+          category: ticket.category,
+          priority: ticket.priority,
+          queueId: ticket.queueId,
+          source: ticket.source,
+        },
+      });
+
       try {
         const { autoAssignTicketToQueueMember } = await import("../services/support-auto-assign");
-        await autoAssignTicketToQueueMember(ticket.id, { actorUserId: user.id });
+        const assignedUserId = await autoAssignTicketToQueueMember(ticket.id, { actorUserId: user.id });
+        if (assignedUserId && assignedUserId !== user.id) {
+          await notifyUser(assignedUserId, {
+            type: 'ticket_assigned',
+            title: `Ticket #${ticket.ticketNumber} assigned to you`,
+            body: ticket.subject,
+            linkUrl: `/support?ticketId=${ticket.id}`,
+            resourceType: 'support_ticket',
+            resourceId: ticket.id,
+            tenantId,
+          });
+          await recordAudit({
+            tenantId,
+            actorLabel: 'system:auto-assign',
+            action: 'support_ticket.assigned',
+            resourceType: 'support_ticket',
+            resourceId: ticket.id,
+            fieldName: 'assignedTo',
+            oldValue: null,
+            newValue: assignedUserId,
+            metadata: { ticketNumber: ticket.ticketNumber, via: 'queue_round_robin' },
+          });
+        }
       } catch {}
 
       try {
@@ -414,6 +456,48 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
         });
       } catch {}
 
+      // Immutable audit trail entry — distinct from the timeline activity row
+      // so that future log mutations to support_ticket_activity (e.g. cleanup
+      // utilities) can't quietly rewrite history.
+      await recordAudit({
+        tenantId: ticket.tenantId,
+        actorUserId: user.id,
+        actorIp: req.ip || null,
+        action: willBeInternal ? 'support_ticket.internal_note_added' : 'support_ticket.reply_added',
+        resourceType: 'support_ticket',
+        resourceId: ticket.id,
+        metadata: { replyId: reply.id, ticketNumber: ticket.ticketNumber },
+      });
+
+      // In-app notifications for non-internal replies: notify the requester
+      // (if a Palomar user), the assignee (if different), and any watcher
+      // user (not external email — those get email separately).
+      if (!willBeInternal) {
+        const recipientIds = new Set<string>();
+        if (ticket.userId && ticket.userId !== user.id) recipientIds.add(ticket.userId);
+        if (ticket.assignedTo && ticket.assignedTo !== user.id) recipientIds.add(ticket.assignedTo);
+        try {
+          const watcherRows = await s.getSupportTicketWatchers(ticket.id);
+          for (const w of watcherRows) {
+            if (w.userId && w.userId !== user.id) recipientIds.add(w.userId);
+          }
+        } catch { /* non-fatal */ }
+        if (recipientIds.size > 0) {
+          const replierName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Support';
+          await Promise.all(Array.from(recipientIds).map((uid) =>
+            notifyUser(uid, {
+              type: 'ticket_new_reply',
+              title: `New reply on ticket #${ticket.ticketNumber}`,
+              body: `${replierName} replied: ${(message || '').slice(0, 140)}`,
+              linkUrl: `/support?ticketId=${ticket.id}`,
+              resourceType: 'support_ticket',
+              resourceId: ticket.id,
+              tenantId: ticket.tenantId,
+            })
+          ));
+        }
+      }
+
       // Mark first response time when an admin posts the first public reply
       if (isAdmin && !willBeInternal && !ticket.firstResponseAt) {
         try {
@@ -517,7 +601,9 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
 
       const updated = await storage.updateSupportTicket(ticket.id, updates);
 
-      // Log activity rows for each tracked field change
+      // Log activity rows for each tracked field change + write parallel
+      // immutable audit entries, and dispatch notifications for the events
+      // that humans should know about (reassignment, status change).
       try {
         const trackedFields = [
           'status', 'priority', 'assignedTo', 'queueId', 'ticketType', 'category',
@@ -545,6 +631,42 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
               oldValue: oldVal,
               newValue: newVal,
             });
+            await recordAudit({
+              tenantId: ticket.tenantId,
+              actorUserId: user.id,
+              actorIp: req.ip || null,
+              action: field === 'assignedTo' ? 'support_ticket.assigned' : `support_ticket.${field}_changed`,
+              resourceType: 'support_ticket',
+              resourceId: ticket.id,
+              fieldName: field,
+              oldValue: oldVal,
+              newValue: newVal,
+              metadata: { ticketNumber: ticket.ticketNumber },
+            });
+
+            // Targeted notifications:
+            if (field === 'assignedTo' && newVal && newVal !== user.id) {
+              await notifyUser(newVal, {
+                type: 'ticket_assigned',
+                title: `Ticket #${ticket.ticketNumber} assigned to you`,
+                body: ticket.subject,
+                linkUrl: `/support?ticketId=${ticket.id}`,
+                resourceType: 'support_ticket',
+                resourceId: ticket.id,
+                tenantId: ticket.tenantId,
+              });
+            }
+            if (field === 'status' && ticket.userId && ticket.userId !== user.id) {
+              await notifyUser(ticket.userId, {
+                type: 'ticket_status_changed',
+                title: `Ticket #${ticket.ticketNumber} is now ${newVal}`,
+                body: ticket.subject,
+                linkUrl: `/support?ticketId=${ticket.id}`,
+                resourceType: 'support_ticket',
+                resourceId: ticket.id,
+                tenantId: ticket.tenantId,
+              });
+            }
           }
         }
       } catch (e) { /* non-fatal */ }
@@ -562,11 +684,12 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
             if (ownerUser) {
               const { getUncachableSendGridClient } = await import("../services/sendgrid-client");
               const { client: sgClient, fromEmail } = await getUncachableSendGridClient();
+              const submitterName = `${ownerUser.firstName || ''} ${ownerUser.lastName || ''}`.trim() || ownerUser.email;
               await sgClient.send({
                 to: "Palomar@synozur.com",
                 from: fromEmail,
                 subject: `[Palomar Support] Ticket #${ticket.ticketNumber} closed by submitter`,
-                html: `<p>Ticket #${ticket.ticketNumber} "<strong>${ticket.subject}</strong>" was closed by the submitter: ${ownerUser.firstName || ''} ${ownerUser.lastName || ''} (${ownerUser.email}).</p>`,
+                html: `<p>Ticket #${ticket.ticketNumber} "<strong>${escapeHtml(ticket.subject)}</strong>" was closed by the submitter: ${escapeHtml(submitterName)} (${escapeHtml(ownerUser.email)}).</p>`,
               });
               console.log(`[SUPPORT] Notified support team that ticket #${ticket.ticketNumber} was closed by submitter`);
             }

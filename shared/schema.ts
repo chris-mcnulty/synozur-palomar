@@ -671,6 +671,70 @@ export type InsertSupportRateLimitBucket = z.infer<typeof insertSupportRateLimit
 export type SupportRateLimitBucket = typeof supportRateLimitBuckets.$inferSelect;
 
 // ============================================================================
+// IN-APP NOTIFICATIONS (Wave 1: support routing, assignment, reply alerts)
+// ============================================================================
+
+export const NOTIFICATION_TYPES = [
+  'ticket_assigned',
+  'ticket_new_reply',
+  'ticket_status_changed',
+  'ticket_sla_breached',
+  'ticket_watcher_added',
+] as const;
+export type NotificationType = typeof NOTIFICATION_TYPES[number];
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: 'cascade' }),
+  type: varchar("type", { length: 64 }).notNull(),
+  title: text("title").notNull(),
+  body: text("body"),
+  linkUrl: text("link_url"),
+  resourceType: varchar("resource_type", { length: 64 }),
+  resourceId: varchar("resource_id"),
+  metadata: jsonb("metadata"),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdx: index("idx_notifications_user").on(table.userId),
+  userUnreadIdx: index("idx_notifications_user_unread").on(table.userId, table.readAt),
+  resourceIdx: index("idx_notifications_resource").on(table.resourceType, table.resourceId),
+}));
+export const insertNotificationSchema = createInsertSchema(notifications).omit({ id: true, createdAt: true, readAt: true });
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+
+// ============================================================================
+// AUDIT LOG (Wave 1: immutable, append-only — write-only via audit helper)
+// ============================================================================
+
+export const auditLog = pgTable("audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: 'set null' }),
+  actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: 'set null' }),
+  actorLabel: text("actor_label"),
+  actorIp: varchar("actor_ip", { length: 64 }),
+  action: varchar("action", { length: 128 }).notNull(),
+  resourceType: varchar("resource_type", { length: 64 }).notNull(),
+  resourceId: varchar("resource_id"),
+  fieldName: varchar("field_name", { length: 128 }),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  metadata: jsonb("metadata"),
+  correlationId: varchar("correlation_id", { length: 64 }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  resourceIdx: index("idx_audit_resource").on(table.resourceType, table.resourceId),
+  tenantIdx: index("idx_audit_tenant").on(table.tenantId),
+  actorIdx: index("idx_audit_actor").on(table.actorUserId),
+  createdIdx: index("idx_audit_created").on(table.createdAt),
+}));
+export const insertAuditLogSchema = createInsertSchema(auditLog).omit({ id: true, createdAt: true });
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLog.$inferSelect;
+
+// ============================================================================
 // AGENT CARD HEALTH CHECKS, PAGE VIEWS
 // ============================================================================
 
