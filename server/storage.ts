@@ -156,6 +156,10 @@ export interface IStorage {
   getSupportAnalytics(tenantId?: string | null): Promise<any>;
   getSupportKbAnalytics(tenantId: string, windowDays: number): Promise<any>;
   getSupportMetricsForAppKey(tenantId: string, appKeyId: string): Promise<{ open: number; awaitingCustomer: number; breachRate7d: number }>;
+  // Wave 2 dashboards
+  getSlaAttainmentDashboard(tenantId: string | null, windowDays: number): Promise<any>;
+  getBacklogAgingDashboard(tenantId: string | null): Promise<any>;
+  getAgentPerformanceDashboard(tenantId: string | null, windowDays: number): Promise<any>;
 
   // Agent Card Health
   saveAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck>;
@@ -988,6 +992,141 @@ export class DbStorage implements IStorage {
       open: row.open || 0,
       awaitingCustomer: row.awaitingCustomer || 0,
       breachRate7d: row.breachRate7d || 0,
+    };
+  }
+
+  // ==================== Wave 2 Dashboards ====================
+  async getSlaAttainmentDashboard(tenantId: string | null, windowDays: number): Promise<any> {
+    const days = Math.max(1, Math.min(Math.floor(windowDays || 30), 365));
+    const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+    const windowExpr = sql.raw(`interval '${days} days'`);
+
+    const overall = await db.execute(sql`
+      WITH base AS (
+        SELECT * FROM support_tickets
+        WHERE ${tenantCond} AND created_at >= now() - ${windowExpr}
+      )
+      SELECT
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN first_response_due_at IS NOT NULL AND first_response_at IS NOT NULL AND first_response_at <= first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
+        SUM(CASE WHEN first_response_due_at IS NOT NULL AND (first_response_at IS NULL OR first_response_at > first_response_due_at) THEN 1 ELSE 0 END)::int AS "frBreached",
+        SUM(CASE WHEN resolution_due_at IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at <= resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime",
+        SUM(CASE WHEN resolution_due_at IS NOT NULL AND (resolved_at IS NULL OR resolved_at > resolution_due_at) THEN 1 ELSE 0 END)::int AS "resBreached"
+      FROM base
+    `);
+    const o: any = ((overall as any).rows || overall)[0] || {};
+
+    const byPriority = await db.execute(sql`
+      SELECT priority,
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN first_response_due_at IS NOT NULL AND first_response_at IS NOT NULL AND first_response_at <= first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
+        SUM(CASE WHEN resolution_due_at IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at <= resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime"
+      FROM support_tickets
+      WHERE ${tenantCond} AND created_at >= now() - ${windowExpr}
+      GROUP BY priority ORDER BY priority
+    `);
+
+    const byQueue = await db.execute(sql`
+      SELECT t.queue_id AS "queueId", q.name AS "queueName",
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN t.first_response_due_at IS NOT NULL AND t.first_response_at IS NOT NULL AND t.first_response_at <= t.first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
+        SUM(CASE WHEN t.resolution_due_at IS NOT NULL AND t.resolved_at IS NOT NULL AND t.resolved_at <= t.resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime"
+      FROM support_tickets t LEFT JOIN support_queues q ON q.id = t.queue_id
+      WHERE ${tenantCond} AND t.created_at >= now() - ${windowExpr}
+      GROUP BY t.queue_id, q.name ORDER BY total DESC
+    `);
+
+    return {
+      windowDays: days,
+      overall: {
+        total: o.total || 0,
+        frOnTime: o.frOnTime || 0,
+        frBreached: o.frBreached || 0,
+        resOnTime: o.resOnTime || 0,
+        resBreached: o.resBreached || 0,
+        frAttainmentPct: o.frOnTime + o.frBreached > 0 ? Math.round((o.frOnTime / (o.frOnTime + o.frBreached)) * 100) : null,
+        resAttainmentPct: o.resOnTime + o.resBreached > 0 ? Math.round((o.resOnTime / (o.resOnTime + o.resBreached)) * 100) : null,
+      },
+      byPriority: ((byPriority as any).rows || byPriority) as any[],
+      byQueue: ((byQueue as any).rows || byQueue) as any[],
+    };
+  }
+
+  async getBacklogAgingDashboard(tenantId: string | null): Promise<any> {
+    const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+    const buckets = await db.execute(sql`
+      WITH base AS (
+        SELECT id, queue_id, priority, EXTRACT(EPOCH FROM (now() - created_at))/86400 AS age_days
+        FROM support_tickets
+        WHERE ${tenantCond} AND status NOT IN ('resolved','closed','cancelled')
+      )
+      SELECT
+        SUM(CASE WHEN age_days < 1 THEN 1 ELSE 0 END)::int AS "lt1d",
+        SUM(CASE WHEN age_days >= 1 AND age_days < 3 THEN 1 ELSE 0 END)::int AS "d1to3",
+        SUM(CASE WHEN age_days >= 3 AND age_days < 7 THEN 1 ELSE 0 END)::int AS "d3to7",
+        SUM(CASE WHEN age_days >= 7 AND age_days < 30 THEN 1 ELSE 0 END)::int AS "d7to30",
+        SUM(CASE WHEN age_days >= 30 THEN 1 ELSE 0 END)::int AS "gte30d",
+        COUNT(*)::int AS total
+      FROM base
+    `);
+    const bRow: any = ((buckets as any).rows || buckets)[0] || {};
+
+    const byQueue = await db.execute(sql`
+      SELECT t.queue_id AS "queueId", q.name AS "queueName", COUNT(*)::int AS open,
+        AVG(EXTRACT(EPOCH FROM (now() - t.created_at))/86400)::float AS "avgAgeDays"
+      FROM support_tickets t LEFT JOIN support_queues q ON q.id = t.queue_id
+      WHERE ${tenantCond} AND t.status NOT IN ('resolved','closed','cancelled')
+      GROUP BY t.queue_id, q.name ORDER BY open DESC
+    `);
+
+    const byPriority = await db.execute(sql`
+      SELECT priority, COUNT(*)::int AS open,
+        AVG(EXTRACT(EPOCH FROM (now() - created_at))/86400)::float AS "avgAgeDays"
+      FROM support_tickets WHERE ${tenantCond} AND status NOT IN ('resolved','closed','cancelled')
+      GROUP BY priority ORDER BY open DESC
+    `);
+
+    return {
+      buckets: {
+        lt1d: bRow.lt1d || 0,
+        d1to3: bRow.d1to3 || 0,
+        d3to7: bRow.d3to7 || 0,
+        d7to30: bRow.d7to30 || 0,
+        gte30d: bRow.gte30d || 0,
+        total: bRow.total || 0,
+      },
+      byQueue: ((byQueue as any).rows || byQueue) as any[],
+      byPriority: ((byPriority as any).rows || byPriority) as any[],
+    };
+  }
+
+  async getAgentPerformanceDashboard(tenantId: string | null, windowDays: number): Promise<any> {
+    const days = Math.max(1, Math.min(Math.floor(windowDays || 30), 365));
+    const tenantCond = tenantId ? sql`t.tenant_id = ${tenantId}` : sql`1=1`;
+    const windowExpr = sql.raw(`interval '${days} days'`);
+    const rows = await db.execute(sql`
+      SELECT
+        u.id AS "userId",
+        u.email,
+        u.first_name AS "firstName",
+        u.last_name AS "lastName",
+        COUNT(*)::int AS assigned,
+        SUM(CASE WHEN t.status IN ('resolved','closed') AND COALESCE(t.resolved_at, t.closed_at) >= now() - ${windowExpr} THEN 1 ELSE 0 END)::int AS "resolvedInWindow",
+        SUM(CASE WHEN t.status NOT IN ('resolved','closed','cancelled') THEN 1 ELSE 0 END)::int AS "openNow",
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (t.first_response_at - t.created_at))/60) FILTER (WHERE t.first_response_at IS NOT NULL)::float AS "medianFrMin",
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (COALESCE(t.resolved_at, t.closed_at) - t.created_at))/60) FILTER (WHERE COALESCE(t.resolved_at, t.closed_at) IS NOT NULL)::float AS "medianResMin",
+        AVG(t.csat_score) FILTER (WHERE t.csat_score IS NOT NULL)::float AS "csatAvg",
+        COUNT(t.csat_score) FILTER (WHERE t.csat_score IS NOT NULL)::int AS "csatCount"
+      FROM support_tickets t
+      JOIN users u ON u.id = t.assigned_to
+      WHERE ${tenantCond} AND t.created_at >= now() - ${windowExpr}
+      GROUP BY u.id, u.email, u.first_name, u.last_name
+      ORDER BY "resolvedInWindow" DESC, assigned DESC
+      LIMIT 100
+    `);
+    return {
+      windowDays: days,
+      agents: ((rows as any).rows || rows) as any[],
     };
   }
 

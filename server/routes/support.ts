@@ -8,6 +8,9 @@ import type { InsertSupportTicketReply, SupportTicketReply, SupportTicketWatcher
 import { escapeHtml } from "../lib/html-escape";
 import { recordAudit } from "../lib/audit";
 import { notifyUser } from "../lib/notifications";
+import { assertTransition, WorkflowError, allowedNextStatuses } from "../lib/ticket-workflow";
+import { applyRoutingRules } from "../lib/ticket-routing";
+import type { TicketStatus } from "@shared/schema";
 
 const s = storage as any;
 
@@ -108,21 +111,49 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
       const tenantId = (req as any).tenantId || user.tenantId;
       const portalToken = crypto.randomBytes(24).toString("hex");
 
+      // Evaluate routing rules BEFORE create so the ticket lands in the right
+      // queue from the start. Manual queueId from the request still wins.
+      const routing = await applyRoutingRules(tenantId, {
+        subject, description, category, priority, source: 'web',
+        applicationSource: 'Palomar', ticketType: ticketType || 'incident',
+      });
+      const effectiveQueueId = queueId || routing.queueId || null;
+      const effectivePriority = routing.priority || priority;
+      const effectiveAssignee = routing.assignedTo || null;
+
       const ticket = await storage.createSupportTicket({
         tenantId,
         userId: user.id,
         category,
         subject,
         description,
-        priority,
+        priority: effectivePriority,
         metadata: metadata || null,
         applicationSource: 'Palomar',
         ticketType: ticketType || 'incident',
         source: 'web',
-        queueId: queueId || null,
+        queueId: effectiveQueueId,
+        assignedTo: effectiveAssignee,
         portalToken,
         status: 'new',
       } as any);
+
+      if (routing.matchedRules.length > 0) {
+        await recordAudit({
+          tenantId,
+          actorLabel: 'system:routing-engine',
+          action: 'support_ticket.routed',
+          resourceType: 'support_ticket',
+          resourceId: ticket.id,
+          metadata: {
+            ticketNumber: ticket.ticketNumber,
+            matchedRules: routing.matchedRules,
+            queueId: effectiveQueueId,
+            assignedTo: effectiveAssignee,
+            priority: effectivePriority,
+          },
+        });
+      }
 
       // Apply SLA
       try {
@@ -594,6 +625,18 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
 
       const wasResolved = ticket.status === 'resolved';
 
+      // Enforce status workflow state machine. Owners are still bound to the
+      // narrow "close-only" rule above; admins go through the same transition
+      // table to prevent illegal jumps like new → resolved.
+      if (updates.status && updates.status !== ticket.status) {
+        try {
+          assertTransition(ticket.status as TicketStatus, updates.status as TicketStatus);
+        } catch (e) {
+          if (e instanceof WorkflowError) return res.status(400).json({ error: e.message });
+          throw e;
+        }
+      }
+
       if (updates.status === "resolved") {
         updates.resolvedAt = new Date();
         updates.resolvedBy = user.id;
@@ -1012,5 +1055,263 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
     res.setHeader("X-Cache", "MISS");
     res.setHeader("Cache-Control", "private, max-age=60");
     return res.json(data);
+  });
+
+  // ===== In-app KB search (deflection helper) =====
+  // Used by the in-app "before you file a ticket, did you check…" helper and
+  // by the ticket-create wizard. Returns published articles matching the
+  // query string; internal-visibility articles are included for authenticated
+  // users (they can't be reached from the public portal).
+  app.get("/api/support/kb/search", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    const q = ((req.query.q as string) || "").trim();
+    if (q.length < 2) return res.json({ articles: [] });
+    const tenantId = user.tenantId;
+    if (!tenantId) return res.json({ articles: [] });
+
+    const internal = await s.getSupportKbArticles?.(tenantId, {
+      visibility: "internal",
+      published: true,
+      search: q,
+    }) || [];
+    const publicArts = await s.getSupportKbArticles?.(tenantId, {
+      visibility: "public",
+      published: true,
+      search: q,
+    }) || [];
+    const merged = [...internal, ...publicArts];
+
+    // Track the deflection lookup so we can correlate KB usage with ticket
+    // filing in support analytics.
+    try {
+      await s.recordSupportEvent?.({
+        tenantId,
+        eventType: "kb_search",
+        sessionId: null,
+        metadata: { q: q.slice(0, 200), resultCount: merged.length, source: "in_app" },
+      });
+    } catch { /* non-fatal */ }
+
+    const limit = Math.min(parseInt((req.query.limit as string) || "10", 10) || 10, 50);
+    return res.json({
+      articles: merged.slice(0, limit).map((a: any) => ({
+        id: a.id, slug: a.slug, title: a.title, summary: a.summary,
+        visibility: a.visibility, tags: a.tags, updatedAt: a.updatedAt,
+      })),
+    });
+  });
+
+  // Record when an in-app search led the user to abandon ticket creation
+  // (the "did this answer your question?" deflection signal). Returns 204.
+  app.post("/api/support/kb/deflection", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    const schema = z.object({
+      articleId: z.string().optional(),
+      query: z.string().max(200).optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
+    try {
+      await s.recordSupportEvent?.({
+        tenantId: user.tenantId,
+        eventType: "ticket_deflected",
+        articleId: parsed.data.articleId || null,
+        sessionId: null,
+        metadata: { q: parsed.data.query, userId: user.id, source: "in_app" },
+      });
+    } catch { /* non-fatal */ }
+    return res.status(204).end();
+  });
+
+  // ===== Workflow introspection =====
+  app.get("/api/support/workflow/transitions/:status", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    return res.json({
+      from: req.params.status,
+      allowedNext: allowedNextStatuses(req.params.status as TicketStatus),
+    });
+  });
+
+  // ===== Bulk operations =====
+  const bulkSchema = z.object({
+    ticketIds: z.array(z.string().min(1)).min(1).max(200),
+    action: z.enum(["set_status", "set_priority", "assign", "set_queue"]),
+    value: z.string().nullable(),
+  });
+  app.post("/api/support/tickets/bulk", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const parsed = bulkSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
+    }
+    const { ticketIds, action, value } = parsed.data;
+
+    // Validate enum values for typed actions before doing any work.
+    if (action === "set_status" && (!value || !(TICKET_STATUSES as readonly string[]).includes(value))) {
+      return res.status(400).json({ error: "Invalid status value" });
+    }
+    if (action === "set_priority" && (!value || !(TICKET_PRIORITIES as readonly string[]).includes(value))) {
+      return res.status(400).json({ error: "Invalid priority value" });
+    }
+
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    for (const id of ticketIds) {
+      try {
+        const ticket = await storage.getSupportTicketById(id);
+        if (!ticket) {
+          failed.push({ id, error: "Not found" });
+          continue;
+        }
+        if (!canStaffAccessTicket(user, ticket)) {
+          failed.push({ id, error: "Forbidden (tenant scope)" });
+          continue;
+        }
+
+        const updates: any = {};
+        let auditField: string;
+        let auditOld: string | null;
+        let auditNew: string | null;
+        let notifyUserId: string | null = null;
+        let notifyType: "ticket_assigned" | "ticket_status_changed" | null = null;
+
+        switch (action) {
+          case "set_status": {
+            try {
+              assertTransition(ticket.status as TicketStatus, value as TicketStatus);
+            } catch (e) {
+              failed.push({ id, error: e instanceof Error ? e.message : "Workflow blocked" });
+              continue;
+            }
+            updates.status = value;
+            if (value === "resolved") {
+              updates.resolvedAt = new Date();
+              updates.resolvedBy = user.id;
+            }
+            auditField = "status";
+            auditOld = ticket.status;
+            auditNew = value;
+            if (ticket.userId && ticket.userId !== user.id) {
+              notifyUserId = ticket.userId;
+              notifyType = "ticket_status_changed";
+            }
+            break;
+          }
+          case "set_priority": {
+            updates.priority = value;
+            auditField = "priority";
+            auditOld = ticket.priority;
+            auditNew = value;
+            break;
+          }
+          case "assign": {
+            updates.assignedTo = value; // null is allowed (unassign)
+            auditField = "assignedTo";
+            auditOld = ticket.assignedTo;
+            auditNew = value;
+            if (value && value !== user.id) {
+              notifyUserId = value;
+              notifyType = "ticket_assigned";
+            }
+            break;
+          }
+          case "set_queue": {
+            updates.queueId = value;
+            auditField = "queueId";
+            auditOld = ticket.queueId;
+            auditNew = value;
+            break;
+          }
+        }
+
+        await storage.updateSupportTicket(ticket.id, updates);
+        await s.logSupportTicketActivity({
+          ticketId: ticket.id,
+          actorUserId: user.id,
+          action: action === "assign" ? "assigned" : `${auditField}_changed`,
+          fieldName: auditField,
+          oldValue: auditOld,
+          newValue: auditNew,
+          note: "bulk_update",
+        });
+        await recordAudit({
+          tenantId: ticket.tenantId,
+          actorUserId: user.id,
+          actorIp: req.ip || null,
+          action: action === "assign" ? "support_ticket.assigned" : `support_ticket.${auditField}_changed`,
+          resourceType: "support_ticket",
+          resourceId: ticket.id,
+          fieldName: auditField,
+          oldValue: auditOld,
+          newValue: auditNew,
+          metadata: { ticketNumber: ticket.ticketNumber, via: "bulk_update" },
+        });
+
+        if (notifyUserId && notifyType) {
+          await notifyUser(notifyUserId, {
+            type: notifyType,
+            title: notifyType === "ticket_assigned"
+              ? `Ticket #${ticket.ticketNumber} assigned to you`
+              : `Ticket #${ticket.ticketNumber} is now ${auditNew}`,
+            body: ticket.subject,
+            linkUrl: `/support?ticketId=${ticket.id}`,
+            resourceType: "support_ticket",
+            resourceId: ticket.id,
+            tenantId: ticket.tenantId,
+          });
+        }
+
+        succeeded.push(id);
+      } catch (e) {
+        failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    return res.json({
+      requested: ticketIds.length,
+      succeeded: succeeded.length,
+      failed: failed.length,
+      successIds: succeeded,
+      failures: failed,
+    });
+  });
+
+  // ===== Reporting dashboards =====
+  app.get("/api/support/dashboards/sla-attainment", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const isPlatformRole = isPlatformAdminUser(user);
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const windowDays = Math.max(1, Math.min(parseInt((req.query.windowDays as string) || "30", 10) || 30, 365));
+    const data = await s.getSlaAttainmentDashboard?.(tenantId, windowDays);
+    return res.json(data || { windowDays, byPriority: [], byQueue: [], overall: {} });
+  });
+
+  app.get("/api/support/dashboards/backlog-aging", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const isPlatformRole = isPlatformAdminUser(user);
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const data = await s.getBacklogAgingDashboard?.(tenantId);
+    return res.json(data || { buckets: [], byQueue: [], byPriority: [] });
+  });
+
+  app.get("/api/support/dashboards/agent-performance", requireAuth, async (req, res) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    if (!isStaff(user)) return res.status(403).json({ error: "Forbidden" });
+    const isPlatformRole = isPlatformAdminUser(user);
+    const tenantId = isPlatformRole ? ((req.query.tenantId as string) || user.tenantId || null) : user.tenantId || null;
+    const windowDays = Math.max(1, Math.min(parseInt((req.query.windowDays as string) || "30", 10) || 30, 365));
+    const data = await s.getAgentPerformanceDashboard?.(tenantId, windowDays);
+    return res.json(data || { windowDays, agents: [] });
   });
 }

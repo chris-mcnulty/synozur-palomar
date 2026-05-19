@@ -4,6 +4,7 @@ import { sendSlaBreachEscalation } from '../email-support.js';
 import { recordAudit } from '../lib/audit.js';
 import { notifyUsers } from '../lib/notifications.js';
 import { withAdvisoryLock } from '../lib/advisory-lock.js';
+import { logger, serializeError } from '../lib/logger.js';
 import {
   TICKET_PRIORITIES,
   type SupportTicket,
@@ -282,8 +283,7 @@ export async function runSlaBreachCheck(
         }
       } catch (perTicketErr) {
         result.errors++;
-        const msg = perTicketErr instanceof Error ? perTicketErr.message : String(perTicketErr);
-        console.error(`${TAG} per-ticket error on ${ticket.id}:`, msg);
+        logger.error('sla_per_ticket_error', { ticketId: ticket.id, jobRunId: jobRun.id, ...serializeError(perTicketErr) });
       }
     }
 
@@ -294,12 +294,12 @@ export async function runSlaBreachCheck(
     });
 
     if (result.firstResponseBreaches + result.resolutionBreaches > 0) {
-      console.log(`${TAG} Run complete:`, result);
+      logger.info('sla_run_complete', { jobRunId: jobRun.id, ...result });
     }
     return result;
   } catch (err) {
+    logger.error('sla_run_failed', { jobRunId: jobRun.id, ...serializeError(err) });
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${TAG} Run failed:`, msg);
     await s.updateScheduledJobRun(jobRun.id, {
       status: 'failed',
       completedAt: new Date(),
