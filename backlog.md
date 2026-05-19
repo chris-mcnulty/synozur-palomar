@@ -1,7 +1,56 @@
 # Palomar Product Backlog
 
-**Last Updated**: April 12, 2026
-**Version**: 6.2 — Copilot Write Activities Phase 0 landed (foundation + client discovery + client create). Phases 3-5 (estimates, HubSpot linkage, Teams channel linkage) tracked below.
+**Last Updated**: May 19, 2026
+**Version**: 6.3 — Centralized Ticket Capture promoted to top P1 per clearing-house vision (signals from Orion, Constellation, and other sibling apps). See `P1_GAPS.md` for the underlying audit.
+
+---
+
+## 🔝 Top Priority — Centralized Ticket Capture (Clearing House)
+
+**Status:** Inbound ingest partially shipped; idempotency, back-sync, and correlation are gaps
+**Effort:** High (4 phases, ~6–8 weeks to full scope)
+**Why:** Palomar's vision is to be the centralized synchronized clearing house that receives support signals from sibling apps (Orion, Constellation, and future Synozur products). Today sibling apps can POST tickets via API key, but retries duplicate tickets, status changes don't sync back to the source app, and there's no automatic correlation when two apps file tickets about the same incident. Closing these gaps is what makes Palomar a clearing house instead of a forwarder.
+
+### Phase 1 — Idempotent Ingest **[P1]**
+**Effort:** Small (3–5 days)
+- [ ] Add `externalReferenceId` as a top-level column on `support_tickets` (today it's buried in `metadata` JSONB at `server/routes/support-external.ts:79-81`)
+- [ ] Unique constraint on `(tenantId, applicationSource, externalReferenceId)` where `externalReferenceId IS NOT NULL`
+- [ ] In `POST /api/external/v1/support/tickets`: lookup on `externalReferenceId` before insert; on hit return existing ticket with HTTP 200 + `idempotent: true` envelope flag (mirrors the old MCP write envelope shape)
+- [ ] Optionally accept `Idempotency-Key` HTTP header as a second dedup path
+- [ ] Migration + drizzle schema update + integration test covering replay
+
+### Phase 2 — Outbound Webhooks to Source Apps **[P1]**
+**Effort:** Medium (2–3 weeks)
+- [ ] New table `support_app_webhook_subscriptions` `(tenantId, appIntegrationKeyId, callbackUrl, secret, events text[], active, createdAt)`
+- [ ] New table `support_webhook_deliveries` for retry / observability `(id, subscriptionId, ticketId, event, payload jsonb, status, attempts, lastError, nextAttemptAt, deliveredAt)`
+- [ ] Emit events from existing write paths in `routes/support.ts` and `routes/support-admin.ts`: `ticket.created`, `ticket.status_changed`, `ticket.replied`, `ticket.merged`, `ticket.resolved`, `ticket.sla_breached`, `ticket.assigned`
+- [ ] HMAC sign deliveries with per-subscription secret
+- [ ] Exponential backoff retry; dead-letter after N attempts
+- [ ] Admin UI showing delivery health per integration key (which sibling apps are unreachable)
+- [ ] OpenAPI / docs updated for the outbound contract sibling apps must implement
+
+### Phase 3 — Automatic Cross-Source Correlation **[P1]**
+**Effort:** Medium (1–2 weeks)
+- [ ] Correlation pass on ingest: auto-create `supportTicketLinks` row with `linkType = 'related'` when two tickets share `externalReferenceId`, or share normalized requester email + subject within a configurable time window
+- [ ] Optional fingerprint correlation when `metadata.errorSignature` (stack hash + error class + route) matches
+- [ ] Emit `ticket.linked` event through the Phase 2 webhook pipe
+- [ ] Surface linked tickets prominently on the ticket detail page in `client/src/pages/support.tsx` (the data is available at `/api/support/tickets/:id/links` but not rendered)
+
+### Phase 4 — Cross-App Signal Ingest (Beyond Tickets) **[P1]**
+**Effort:** Medium-High (2–3 weeks; benefits from a design doc first)
+- [ ] New table `app_signals` (or extend `supportEvents`) — `(id, tenantId, appIntegrationKeyId, applicationSource, signalType, externalReferenceId, occurredAt, severity, payload jsonb, ticketId nullable)`. Today `supportEvents` is KB-deflection only.
+- [ ] New endpoint `POST /api/external/v1/support/signals` (batch-accepting) for sibling apps to push errors, deploys, alerts, customer-health changes
+- [ ] On ticket ingest, look back N minutes of `app_signals` for same source + customer and attach as "related events" to the ticket
+- [ ] Admin view overlaying signal volume on the ticket-volume timeline so spikes are obvious
+- [ ] Document the signal types and payload shapes for sibling apps to publish against
+
+### Explicit Non-Goals for v1
+Federated identity across source apps (matching same user across Orion + Constellation tenants), KB cross-publishing to sibling apps, bulk backfill ingest of historical tickets, real-time bidirectional ticket-content sync (replies in source app reflected in Palomar without separate API call).
+
+### Reference
+- Audit and rationale: `P1_GAPS.md`
+- Current ingest entry point: `server/routes/support-external.ts:71-155`
+- Schema today: `shared/schema.ts` — `supportTickets`, `supportAppIntegrationKeys`, `supportTicketLinks`, `supportEvents`
 
 ---
 
