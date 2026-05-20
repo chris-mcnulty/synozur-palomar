@@ -1,5 +1,6 @@
 import {
   users, tenants, blockedDomains, systemSettings,
+  tenantUsers,
   groundingDocuments,
   supportQueues, supportQueueMembers, supportQueueRoundRobinState,
   supportSlaPolicies, supportKbArticles, supportAppIntegrationKeys,
@@ -7,6 +8,7 @@ import {
   supportTicketWatchers, supportTicketActivity,
   supportSavedFilters,
   agentCardHealthChecks,
+  scheduledJobRuns,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type BlockedDomain, type InsertBlockedDomain,
@@ -24,6 +26,7 @@ import {
   type SupportTicketActivity, type InsertSupportTicketActivity,
   type SupportSavedFilter, type InsertSupportSavedFilter,
   type AgentCardHealthCheck, type InsertAgentCardHealthCheck,
+  type ScheduledJobRun, type InsertScheduledJobRun,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, ne, and, or, desc, asc, sql, ilike, isNotNull, isNull, inArray, gte, lte, type SQL } from "drizzle-orm";
@@ -120,6 +123,8 @@ export interface IStorage {
     closedSince?: Date;
   }): Promise<SupportTicket[]>;
   getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
+  getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]>;
+  isUserMemberOfTenant(userId: string, tenantId: string): Promise<boolean>;
   createSupportTicket(ticket: InsertSupportTicket): Promise<SupportTicket>;
   updateSupportTicket(id: string, updates: Partial<InsertSupportTicket>): Promise<SupportTicket>;
   getSupportTicketByPortalToken(token: string): Promise<SupportTicket | undefined>;
@@ -154,12 +159,22 @@ export interface IStorage {
   getSupportAnalytics(tenantId?: string | null): Promise<any>;
   getSupportKbAnalytics(tenantId: string, windowDays: number): Promise<any>;
   getSupportMetricsForAppKey(tenantId: string, appKeyId: string): Promise<{ open: number; awaitingCustomer: number; breachRate7d: number }>;
+  // Wave 2 dashboards
+  getSlaAttainmentDashboard(tenantId: string | null, windowDays: number): Promise<any>;
+  getBacklogAgingDashboard(tenantId: string | null): Promise<any>;
+  getAgentPerformanceDashboard(tenantId: string | null, windowDays: number): Promise<any>;
 
   // Agent Card Health
   saveAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck>;
   addAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck>;
   getAgentCardHealthChecks(limit?: number): Promise<AgentCardHealthCheck[]>;
   pruneAgentCardHealthHistory(olderThanDays: number): Promise<number>;
+
+  // Scheduled job runs (telemetry + heartbeat)
+  createScheduledJobRun(run: Partial<InsertScheduledJobRun>): Promise<ScheduledJobRun>;
+  updateScheduledJobRun(id: string, updates: Partial<ScheduledJobRun>): Promise<ScheduledJobRun>;
+  getLastScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined>;
+  getLastSuccessfulScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined>;
 }
 
 export class DbStorage implements IStorage {
@@ -633,6 +648,23 @@ export class DbStorage implements IStorage {
     return t;
   }
 
+  async getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]> {
+    if (!ids.length) return [];
+    return db.select().from(supportTickets).where(inArray(supportTickets.id, ids));
+  }
+
+  async isUserMemberOfTenant(userId: string, tenantId: string): Promise<boolean> {
+    const [row] = await db.select({ id: tenantUsers.id })
+      .from(tenantUsers)
+      .where(and(
+        eq(tenantUsers.userId, userId),
+        eq(tenantUsers.tenantId, tenantId),
+        eq(tenantUsers.status, 'active'),
+      ))
+      .limit(1);
+    return !!row;
+  }
+
   private async getNextTicketNumber(): Promise<number> {
     const result = await db.select({ maxNum: sql<number>`COALESCE(MAX(${supportTickets.ticketNumber}), 0)` })
       .from(supportTickets);
@@ -983,6 +1015,147 @@ export class DbStorage implements IStorage {
     };
   }
 
+  // ==================== Wave 2 Dashboards ====================
+  async getSlaAttainmentDashboard(tenantId: string | null, windowDays: number): Promise<any> {
+    const days = Math.max(1, Math.min(Math.floor(windowDays || 30), 365));
+    // Two predicates: bare for single-table queries, alias-qualified for the
+    // joined query against `support_queues` (which also has a `tenant_id`
+    // column and would otherwise make the predicate ambiguous in SQL).
+    const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+    const tenantCondT = tenantId ? sql`t.tenant_id = ${tenantId}` : sql`1=1`;
+    const windowExpr = sql.raw(`interval '${days} days'`);
+
+    const overall = await db.execute(sql`
+      WITH base AS (
+        SELECT * FROM support_tickets
+        WHERE ${tenantCond} AND created_at >= now() - ${windowExpr}
+      )
+      SELECT
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN first_response_due_at IS NOT NULL AND first_response_at IS NOT NULL AND first_response_at <= first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
+        SUM(CASE WHEN first_response_due_at IS NOT NULL AND (first_response_at IS NULL OR first_response_at > first_response_due_at) THEN 1 ELSE 0 END)::int AS "frBreached",
+        SUM(CASE WHEN resolution_due_at IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at <= resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime",
+        SUM(CASE WHEN resolution_due_at IS NOT NULL AND (resolved_at IS NULL OR resolved_at > resolution_due_at) THEN 1 ELSE 0 END)::int AS "resBreached"
+      FROM base
+    `);
+    const o: any = ((overall as any).rows || overall)[0] || {};
+
+    const byPriority = await db.execute(sql`
+      SELECT priority,
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN first_response_due_at IS NOT NULL AND first_response_at IS NOT NULL AND first_response_at <= first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
+        SUM(CASE WHEN resolution_due_at IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at <= resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime"
+      FROM support_tickets
+      WHERE ${tenantCond} AND created_at >= now() - ${windowExpr}
+      GROUP BY priority ORDER BY priority
+    `);
+
+    const byQueue = await db.execute(sql`
+      SELECT t.queue_id AS "queueId", q.name AS "queueName",
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN t.first_response_due_at IS NOT NULL AND t.first_response_at IS NOT NULL AND t.first_response_at <= t.first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
+        SUM(CASE WHEN t.resolution_due_at IS NOT NULL AND t.resolved_at IS NOT NULL AND t.resolved_at <= t.resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime"
+      FROM support_tickets t LEFT JOIN support_queues q ON q.id = t.queue_id
+      WHERE ${tenantCondT} AND t.created_at >= now() - ${windowExpr}
+      GROUP BY t.queue_id, q.name ORDER BY total DESC
+    `);
+
+    return {
+      windowDays: days,
+      overall: {
+        total: o.total || 0,
+        frOnTime: o.frOnTime || 0,
+        frBreached: o.frBreached || 0,
+        resOnTime: o.resOnTime || 0,
+        resBreached: o.resBreached || 0,
+        frAttainmentPct: o.frOnTime + o.frBreached > 0 ? Math.round((o.frOnTime / (o.frOnTime + o.frBreached)) * 100) : null,
+        resAttainmentPct: o.resOnTime + o.resBreached > 0 ? Math.round((o.resOnTime / (o.resOnTime + o.resBreached)) * 100) : null,
+      },
+      byPriority: ((byPriority as any).rows || byPriority) as any[],
+      byQueue: ((byQueue as any).rows || byQueue) as any[],
+    };
+  }
+
+  async getBacklogAgingDashboard(tenantId: string | null): Promise<any> {
+    // See getSlaAttainmentDashboard for why we keep two predicates.
+    const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+    const tenantCondT = tenantId ? sql`t.tenant_id = ${tenantId}` : sql`1=1`;
+    const buckets = await db.execute(sql`
+      WITH base AS (
+        SELECT id, queue_id, priority, EXTRACT(EPOCH FROM (now() - created_at))/86400 AS age_days
+        FROM support_tickets
+        WHERE ${tenantCond} AND status NOT IN ('resolved','closed','cancelled')
+      )
+      SELECT
+        SUM(CASE WHEN age_days < 1 THEN 1 ELSE 0 END)::int AS "lt1d",
+        SUM(CASE WHEN age_days >= 1 AND age_days < 3 THEN 1 ELSE 0 END)::int AS "d1to3",
+        SUM(CASE WHEN age_days >= 3 AND age_days < 7 THEN 1 ELSE 0 END)::int AS "d3to7",
+        SUM(CASE WHEN age_days >= 7 AND age_days < 30 THEN 1 ELSE 0 END)::int AS "d7to30",
+        SUM(CASE WHEN age_days >= 30 THEN 1 ELSE 0 END)::int AS "gte30d",
+        COUNT(*)::int AS total
+      FROM base
+    `);
+    const bRow: any = ((buckets as any).rows || buckets)[0] || {};
+
+    const byQueue = await db.execute(sql`
+      SELECT t.queue_id AS "queueId", q.name AS "queueName", COUNT(*)::int AS open,
+        AVG(EXTRACT(EPOCH FROM (now() - t.created_at))/86400)::float AS "avgAgeDays"
+      FROM support_tickets t LEFT JOIN support_queues q ON q.id = t.queue_id
+      WHERE ${tenantCondT} AND t.status NOT IN ('resolved','closed','cancelled')
+      GROUP BY t.queue_id, q.name ORDER BY open DESC
+    `);
+
+    const byPriority = await db.execute(sql`
+      SELECT priority, COUNT(*)::int AS open,
+        AVG(EXTRACT(EPOCH FROM (now() - created_at))/86400)::float AS "avgAgeDays"
+      FROM support_tickets WHERE ${tenantCond} AND status NOT IN ('resolved','closed','cancelled')
+      GROUP BY priority ORDER BY open DESC
+    `);
+
+    return {
+      buckets: {
+        lt1d: bRow.lt1d || 0,
+        d1to3: bRow.d1to3 || 0,
+        d3to7: bRow.d3to7 || 0,
+        d7to30: bRow.d7to30 || 0,
+        gte30d: bRow.gte30d || 0,
+        total: bRow.total || 0,
+      },
+      byQueue: ((byQueue as any).rows || byQueue) as any[],
+      byPriority: ((byPriority as any).rows || byPriority) as any[],
+    };
+  }
+
+  async getAgentPerformanceDashboard(tenantId: string | null, windowDays: number): Promise<any> {
+    const days = Math.max(1, Math.min(Math.floor(windowDays || 30), 365));
+    const tenantCond = tenantId ? sql`t.tenant_id = ${tenantId}` : sql`1=1`;
+    const windowExpr = sql.raw(`interval '${days} days'`);
+    const rows = await db.execute(sql`
+      SELECT
+        u.id AS "userId",
+        u.email,
+        u.first_name AS "firstName",
+        u.last_name AS "lastName",
+        COUNT(*)::int AS assigned,
+        SUM(CASE WHEN t.status IN ('resolved','closed') AND COALESCE(t.resolved_at, t.closed_at) >= now() - ${windowExpr} THEN 1 ELSE 0 END)::int AS "resolvedInWindow",
+        SUM(CASE WHEN t.status NOT IN ('resolved','closed','cancelled') THEN 1 ELSE 0 END)::int AS "openNow",
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (t.first_response_at - t.created_at))/60) FILTER (WHERE t.first_response_at IS NOT NULL)::float AS "medianFrMin",
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (COALESCE(t.resolved_at, t.closed_at) - t.created_at))/60) FILTER (WHERE COALESCE(t.resolved_at, t.closed_at) IS NOT NULL)::float AS "medianResMin",
+        AVG(t.csat_score) FILTER (WHERE t.csat_score IS NOT NULL)::float AS "csatAvg",
+        COUNT(t.csat_score) FILTER (WHERE t.csat_score IS NOT NULL)::int AS "csatCount"
+      FROM support_tickets t
+      JOIN users u ON u.id = t.assigned_to
+      WHERE ${tenantCond} AND t.created_at >= now() - ${windowExpr}
+      GROUP BY u.id, u.email, u.first_name, u.last_name
+      ORDER BY "resolvedInWindow" DESC, assigned DESC
+      LIMIT 100
+    `);
+    return {
+      windowDays: days,
+      agents: ((rows as any).rows || rows) as any[],
+    };
+  }
+
   // ==================== Agent Card Health ====================
   async saveAgentCardHealthCheck(result: InsertAgentCardHealthCheck): Promise<AgentCardHealthCheck> {
     const [created] = await db.insert(agentCardHealthChecks).values(result).returning();
@@ -1006,6 +1179,53 @@ export class DbStorage implements IStorage {
       .where(lte(agentCardHealthChecks.checkedAt, cutoff))
       .returning({ id: agentCardHealthChecks.id });
     return result.length;
+  }
+
+  // ==================== Scheduled Job Runs ====================
+  async createScheduledJobRun(run: Partial<InsertScheduledJobRun>): Promise<ScheduledJobRun> {
+    if (!run.jobType) throw new Error("createScheduledJobRun requires jobType");
+    if (!run.status) throw new Error("createScheduledJobRun requires status");
+    if (!run.triggeredBy) throw new Error("createScheduledJobRun requires triggeredBy");
+    const [created] = await db.insert(scheduledJobRuns).values({
+      tenantId: run.tenantId ?? null,
+      jobType: run.jobType,
+      status: run.status,
+      triggeredBy: run.triggeredBy,
+      triggeredByUserId: run.triggeredByUserId ?? null,
+      resultSummary: (run.resultSummary as any) ?? null,
+      errorMessage: run.errorMessage ?? null,
+      completedAt: run.completedAt ?? null,
+    }).returning();
+    return created;
+  }
+
+  async updateScheduledJobRun(id: string, updates: Partial<ScheduledJobRun>): Promise<ScheduledJobRun> {
+    const patch: Record<string, unknown> = {};
+    if (updates.status !== undefined) patch.status = updates.status;
+    if (updates.completedAt !== undefined) patch.completedAt = updates.completedAt;
+    if (updates.resultSummary !== undefined) patch.resultSummary = updates.resultSummary as any;
+    if (updates.errorMessage !== undefined) patch.errorMessage = updates.errorMessage;
+    const [updated] = await db.update(scheduledJobRuns)
+      .set(patch as any)
+      .where(eq(scheduledJobRuns.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getLastScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db.select().from(scheduledJobRuns)
+      .where(eq(scheduledJobRuns.jobType, jobType))
+      .orderBy(desc(scheduledJobRuns.startedAt))
+      .limit(1);
+    return row;
+  }
+
+  async getLastSuccessfulScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db.select().from(scheduledJobRuns)
+      .where(and(eq(scheduledJobRuns.jobType, jobType), eq(scheduledJobRuns.status, 'completed')))
+      .orderBy(desc(scheduledJobRuns.startedAt))
+      .limit(1);
+    return row;
   }
 }
 

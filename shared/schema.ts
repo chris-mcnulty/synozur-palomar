@@ -640,6 +640,56 @@ export const insertSupportTicketActivitySchema = createInsertSchema(supportTicke
 export type InsertSupportTicketActivity = z.infer<typeof insertSupportTicketActivitySchema>;
 export type SupportTicketActivity = typeof supportTicketActivity.$inferSelect;
 
+// ===== Ticket Links (Wave 3: duplicates + related-to relationships) =====
+export const supportTicketLinks = pgTable("support_ticket_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  linkedTicketId: varchar("linked_ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  linkType: varchar("link_type", { length: 32 }).notNull(),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
+  note: text("note"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  ticketIdx: index("idx_support_ticket_links_ticket").on(table.ticketId),
+  linkedIdx: index("idx_support_ticket_links_linked").on(table.linkedTicketId),
+  uniquePair: uniqueIndex("unique_support_ticket_link").on(table.ticketId, table.linkedTicketId, table.linkType),
+}));
+export const insertSupportTicketLinkSchema = createInsertSchema(supportTicketLinks).omit({ id: true, createdAt: true });
+export type InsertSupportTicketLink = z.infer<typeof insertSupportTicketLinkSchema>;
+export type SupportTicketLink = typeof supportTicketLinks.$inferSelect;
+
+// ===== Routing Rules (Wave 3: skill / team / escalation routing) =====
+export const supportRoutingRules = pgTable("support_routing_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  name: text("name").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  // Conditions: JSON object — any subset of:
+  //   { subjectContains?: string, descriptionContains?: string,
+  //     category?: string, priority?: string, source?: string,
+  //     applicationSource?: string, ticketType?: string }
+  // All present conditions must match (AND).
+  conditions: jsonb("conditions").notNull(),
+  // Action: one of routing_rule_actions; corresponding target* field must be set.
+  action: varchar("action", { length: 32 }).notNull(),
+  targetQueueId: varchar("target_queue_id").references(() => supportQueues.id, { onDelete: 'set null' }),
+  targetUserId: varchar("target_user_id").references(() => users.id, { onDelete: 'set null' }),
+  targetPriority: varchar("target_priority", { length: 16 }),
+  // When true, after this rule matches, downstream rules are not evaluated.
+  stopOnMatch: boolean("stop_on_match").notNull().default(true),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  tenantIdx: index("idx_support_routing_rules_tenant").on(table.tenantId),
+  activeOrderIdx: index("idx_support_routing_rules_active_order").on(table.tenantId, table.isActive, table.sortOrder),
+}));
+export const insertSupportRoutingRuleSchema = createInsertSchema(supportRoutingRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSupportRoutingRule = z.infer<typeof insertSupportRoutingRuleSchema>;
+export type SupportRoutingRule = typeof supportRoutingRules.$inferSelect;
+
 // ===== Saved Filters (per user, scoped to tenant) =====
 export const supportSavedFilters = pgTable("support_saved_filters", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -669,6 +719,91 @@ export const supportRateLimitBuckets = pgTable("support_rate_limit_buckets", {
 export const insertSupportRateLimitBucketSchema = createInsertSchema(supportRateLimitBuckets).omit({ id: true, hitAt: true });
 export type InsertSupportRateLimitBucket = z.infer<typeof insertSupportRateLimitBucketSchema>;
 export type SupportRateLimitBucket = typeof supportRateLimitBuckets.$inferSelect;
+
+// ============================================================================
+// SUPPORT TICKET LINKS (Wave 3: duplicate handling, related-to relationships)
+// ============================================================================
+
+export const TICKET_LINK_TYPES = [
+  'duplicate_of',
+  'related_to',
+  'blocks',
+  'blocked_by',
+  'parent_of',
+  'child_of',
+] as const;
+export type TicketLinkType = typeof TICKET_LINK_TYPES[number];
+
+// ============================================================================
+// SUPPORT ROUTING RULES (Wave 3: skill / team / escalation routing)
+// ============================================================================
+
+export const ROUTING_RULE_ACTIONS = ['route_to_queue', 'assign_to_user', 'set_priority'] as const;
+export type RoutingRuleAction = typeof ROUTING_RULE_ACTIONS[number];
+
+// ============================================================================
+// IN-APP NOTIFICATIONS (Wave 1: support routing, assignment, reply alerts)
+// ============================================================================
+
+export const NOTIFICATION_TYPES = [
+  'ticket_assigned',
+  'ticket_new_reply',
+  'ticket_status_changed',
+  'ticket_sla_breached',
+  'ticket_watcher_added',
+] as const;
+export type NotificationType = typeof NOTIFICATION_TYPES[number];
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: 'cascade' }),
+  type: varchar("type", { length: 64 }).notNull(),
+  title: text("title").notNull(),
+  body: text("body"),
+  linkUrl: text("link_url"),
+  resourceType: varchar("resource_type", { length: 64 }),
+  resourceId: varchar("resource_id"),
+  metadata: jsonb("metadata"),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdx: index("idx_notifications_user").on(table.userId),
+  userUnreadIdx: index("idx_notifications_user_unread").on(table.userId, table.readAt),
+  resourceIdx: index("idx_notifications_resource").on(table.resourceType, table.resourceId),
+}));
+export const insertNotificationSchema = createInsertSchema(notifications).omit({ id: true, createdAt: true, readAt: true });
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+
+// ============================================================================
+// AUDIT LOG (Wave 1: immutable, append-only — write-only via audit helper)
+// ============================================================================
+
+export const auditLog = pgTable("audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: 'set null' }),
+  actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: 'set null' }),
+  actorLabel: text("actor_label"),
+  actorIp: varchar("actor_ip", { length: 64 }),
+  action: varchar("action", { length: 128 }).notNull(),
+  resourceType: varchar("resource_type", { length: 64 }).notNull(),
+  resourceId: varchar("resource_id"),
+  fieldName: varchar("field_name", { length: 128 }),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  metadata: jsonb("metadata"),
+  correlationId: varchar("correlation_id", { length: 64 }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  resourceIdx: index("idx_audit_resource").on(table.resourceType, table.resourceId),
+  tenantIdx: index("idx_audit_tenant").on(table.tenantId),
+  actorIdx: index("idx_audit_actor").on(table.actorUserId),
+  createdIdx: index("idx_audit_created").on(table.createdAt),
+}));
+export const insertAuditLogSchema = createInsertSchema(auditLog).omit({ id: true, createdAt: true });
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLog.$inferSelect;
 
 // ============================================================================
 // AGENT CARD HEALTH CHECKS, PAGE VIEWS

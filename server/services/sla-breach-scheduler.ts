@@ -1,6 +1,10 @@
 import * as cron from 'node-cron';
 import { storage } from '../storage.js';
 import { sendSlaBreachEscalation } from '../email-support.js';
+import { recordAudit } from '../lib/audit.js';
+import { notifyUsers } from '../lib/notifications.js';
+import { withAdvisoryLock } from '../lib/advisory-lock.js';
+import { logger, serializeError } from '../lib/logger.js';
 import {
   TICKET_PRIORITIES,
   type SupportTicket,
@@ -42,6 +46,8 @@ interface SlaBreachStorage {
   logSupportTicketActivity(entry: Partial<SupportTicketActivity> & { ticketId: string; action: string }): Promise<SupportTicketActivity>;
   createScheduledJobRun(run: Partial<ScheduledJobRun>): Promise<ScheduledJobRun>;
   updateScheduledJobRun(id: string, updates: Partial<ScheduledJobRun>): Promise<ScheduledJobRun>;
+  getLastSuccessfulScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined>;
+  getPlatformAdminEmails(): Promise<string[]>;
 }
 
 const s = storage as unknown as SlaBreachStorage;
@@ -153,6 +159,27 @@ export async function runSlaBreachCheck(
             fieldName: 'firstResponseDueAt',
             note: `First response overdue by ${overdue}m`,
           });
+          await recordAudit({
+            tenantId: ticket.tenantId,
+            actorLabel: 'system:sla-watcher',
+            action: 'support_ticket.sla_breached',
+            resourceType: 'support_ticket',
+            resourceId: ticket.id,
+            fieldName: 'firstResponseDueAt',
+            metadata: { breachType: 'first_response', overdueMinutes: overdue, ticketNumber: ticket.ticketNumber },
+          });
+          // In-app notify assignee + watcher users.
+          const watcherUserIds = (await s.getSupportTicketWatchers(ticket.id))
+            .map((w) => w.userId).filter((id): id is string => !!id);
+          await notifyUsers([ticket.assignedTo, ...watcherUserIds], {
+            type: 'ticket_sla_breached',
+            title: `SLA breach: ticket #${ticket.ticketNumber} first response overdue`,
+            body: `Overdue by ${overdue}m — ${ticket.subject}`,
+            linkUrl: `/support?ticketId=${ticket.id}`,
+            resourceType: 'support_ticket',
+            resourceId: ticket.id,
+            tenantId: ticket.tenantId,
+          });
           try {
             await sendSlaBreachEscalation(ticket, recipients, {
               breachType: 'first_response',
@@ -201,7 +228,41 @@ export async function runSlaBreachCheck(
               newValue: priorityBumpedTo,
               note: 'Auto-escalated on SLA resolution breach',
             });
+            await recordAudit({
+              tenantId: ticket.tenantId,
+              actorLabel: 'system:sla-watcher',
+              action: 'support_ticket.priority_bumped',
+              resourceType: 'support_ticket',
+              resourceId: ticket.id,
+              fieldName: 'priority',
+              oldValue: ticket.priority,
+              newValue: priorityBumpedTo,
+              metadata: { reason: 'sla_resolution_breach', ticketNumber: ticket.ticketNumber },
+            });
           }
+
+          await recordAudit({
+            tenantId: ticket.tenantId,
+            actorLabel: 'system:sla-watcher',
+            action: 'support_ticket.sla_breached',
+            resourceType: 'support_ticket',
+            resourceId: ticket.id,
+            fieldName: 'resolutionDueAt',
+            metadata: { breachType: 'resolution', overdueMinutes: overdue, priorityBumpedTo, ticketNumber: ticket.ticketNumber },
+          });
+
+          // In-app notify assignee + watcher users for resolution breach.
+          const watcherUserIds = (await s.getSupportTicketWatchers(ticket.id))
+            .map((w) => w.userId).filter((id): id is string => !!id);
+          await notifyUsers([ticket.assignedTo, ...watcherUserIds], {
+            type: 'ticket_sla_breached',
+            title: `SLA breach: ticket #${ticket.ticketNumber} resolution overdue`,
+            body: `Overdue by ${overdue}m — ${ticket.subject}`,
+            linkUrl: `/support?ticketId=${ticket.id}`,
+            resourceType: 'support_ticket',
+            resourceId: ticket.id,
+            tenantId: ticket.tenantId,
+          });
 
           try {
             await sendSlaBreachEscalation(ticket, recipients, {
@@ -224,8 +285,7 @@ export async function runSlaBreachCheck(
         }
       } catch (perTicketErr) {
         result.errors++;
-        const msg = perTicketErr instanceof Error ? perTicketErr.message : String(perTicketErr);
-        console.error(`${TAG} per-ticket error on ${ticket.id}:`, msg);
+        logger.error('sla_per_ticket_error', { ticketId: ticket.id, jobRunId: jobRun.id, ...serializeError(perTicketErr) });
       }
     }
 
@@ -236,12 +296,12 @@ export async function runSlaBreachCheck(
     });
 
     if (result.firstResponseBreaches + result.resolutionBreaches > 0) {
-      console.log(`${TAG} Run complete:`, result);
+      logger.info('sla_run_complete', { jobRunId: jobRun.id, ...result });
     }
     return result;
   } catch (err) {
+    logger.error('sla_run_failed', { jobRunId: jobRun.id, ...serializeError(err) });
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${TAG} Run failed:`, msg);
     await s.updateScheduledJobRun(jobRun.id, {
       status: 'failed',
       completedAt: new Date(),
@@ -253,6 +313,68 @@ export async function runSlaBreachCheck(
 }
 
 let scheduledTask: cron.ScheduledTask | null = null;
+let heartbeatTask: cron.ScheduledTask | null = null;
+
+const SLA_LOCK_KEY = 'sla-breach-watcher';
+// If the watcher hasn't logged a successful run in this many minutes, alert.
+const HEARTBEAT_STALENESS_MIN = 5;
+
+/**
+ * Wrap the SLA breach check with a Postgres advisory lock so that if multiple
+ * instances of the server are running, only one fires the watcher per tick.
+ * Failures to acquire the lock are not errors — they just mean another runner
+ * picked up the work.
+ */
+async function runSlaBreachCheckLocked(): Promise<void> {
+  const { acquired } = await withAdvisoryLock(SLA_LOCK_KEY, async () => {
+    return runSlaBreachCheck();
+  });
+  if (!acquired) {
+    // Another process is running this tick. That's the design — exit quietly.
+    return;
+  }
+}
+
+let lastStalenessAlertAt = 0;
+const STALENESS_ALERT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+
+async function runHeartbeatCheck(): Promise<void> {
+  try {
+    const last = await s.getLastSuccessfulScheduledJobRun('sla_breach_watcher');
+    if (!last) return; // First-run skip; the runner has yet to record anything.
+    const ageMs = Date.now() - new Date(last.startedAt).getTime();
+    const ageMin = Math.floor(ageMs / 60_000);
+    if (ageMin >= HEARTBEAT_STALENESS_MIN) {
+      // Cooldown so we don't spam the log every minute once stale.
+      if (Date.now() - lastStalenessAlertAt < STALENESS_ALERT_COOLDOWN_MS) return;
+      lastStalenessAlertAt = Date.now();
+      logger.error(
+        `${TAG} STALE: SLA breach watcher hasn't completed successfully — escalation pipeline is silent`,
+        { ageMin, thresholdMin: HEARTBEAT_STALENESS_MIN, lastSuccessfulRunAt: last.startedAt },
+      );
+      try {
+        const { getUncachableSendGridClient } = await import('../services/sendgrid-client.js');
+        const { client, fromEmail } = await getUncachableSendGridClient();
+        const adminEmails = await s.getPlatformAdminEmails();
+        if (Array.isArray(adminEmails) && adminEmails.length > 0) {
+          await client.send({
+            to: adminEmails[0],
+            bcc: adminEmails.length > 1 ? adminEmails.slice(1) : undefined,
+            from: fromEmail,
+            subject: `[Palomar] SLA breach watcher is stale (${ageMin}m without a successful run)`,
+            html: `<p>The SLA breach watcher has not completed successfully in <strong>${ageMin} minutes</strong>.</p>
+                   <p>Last successful run: ${last.startedAt}</p>
+                   <p>This means SLA breach emails, in-app notifications, priority bumps, and audit entries are not being emitted. Investigate scheduler health.</p>`,
+          });
+        }
+      } catch (mailErr) {
+        logger.error(`${TAG} Failed to send staleness alert email`, serializeError(mailErr));
+      }
+    }
+  } catch (err) {
+    logger.error(`${TAG} Heartbeat check failed`, serializeError(err));
+  }
+}
 
 export async function startSlaBreachScheduler(): Promise<void> {
   if (scheduledTask) {
@@ -261,19 +383,29 @@ export async function startSlaBreachScheduler(): Promise<void> {
   }
   scheduledTask = cron.schedule('* * * * *', async () => {
     try {
-      await runSlaBreachCheck();
+      await runSlaBreachCheckLocked();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`${TAG} Cron tick failed:`, msg);
     }
   });
-  console.log(`${TAG} Scheduler started (every minute)`);
+  // Heartbeat / staleness alert. Runs every 5 minutes; alerts (with 1h
+  // cooldown) when no successful SLA run has been recorded within the
+  // staleness threshold. Catches the "scheduler silently died" case.
+  heartbeatTask = cron.schedule('*/5 * * * *', async () => {
+    await runHeartbeatCheck();
+  });
+  console.log(`${TAG} Scheduler started (every minute) + heartbeat watch (every 5 min)`);
 }
 
 export function stopSlaBreachScheduler(): void {
   if (scheduledTask) {
     scheduledTask.stop();
     scheduledTask = null;
-    console.log(`${TAG} Scheduler stopped`);
   }
+  if (heartbeatTask) {
+    heartbeatTask.stop();
+    heartbeatTask = null;
+  }
+  console.log(`${TAG} Scheduler stopped`);
 }

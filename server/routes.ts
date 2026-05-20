@@ -31,6 +31,10 @@ import { registerSupportRoutes } from "./routes/support.js";
 import { registerSupportExternalRoutes } from "./routes/support-external.js";
 import { registerSupportPortalRoutes } from "./routes/support-portal.js";
 import { registerSupportAdminRoutes } from "./routes/support-admin.js";
+import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerAuditRoutes } from "./routes/audit.js";
+import { registerSupportLinkRoutes } from "./routes/support-links.js";
+import { registerSupportRoutingRoutes } from "./routes/support-routing.js";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -135,6 +139,18 @@ export async function registerRoutes(app: Express): Promise<void> {
   registerSupportExternalRoutes(app);
   registerSupportPortalRoutes(app);
   registerSupportAdminRoutes(app, { requireAuth, requireRole });
+
+  // ── In-app notifications (Wave 1) ──
+  registerNotificationRoutes(app, { requireAuth });
+
+  // ── Audit log read endpoints (Wave 1) ──
+  registerAuditRoutes(app, { requireAuth });
+
+  // ── Ticket links / merge / duplicate (Wave 3) ──
+  registerSupportLinkRoutes(app, { requireAuth });
+
+  // ── Routing rules engine (Wave 3) ──
+  registerSupportRoutingRoutes(app, { requireAuth, requireRole });
 
   // ── Environment ──
   app.get("/api/environment", async (_req, res) => {

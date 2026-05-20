@@ -1,7 +1,10 @@
 import express, { type Request, Response, NextFunction, type Express } from "express";
 import { createServer, type Server } from "http";
 import compression from "compression";
+import helmet from "helmet";
+import crypto from "crypto";
 import { setupVite, serveStatic, log } from "./vite";
+import { logger, reqLogger, serializeError } from "./lib/logger";
 
 const app = express();
 
@@ -13,6 +16,20 @@ app.use(
       if (req.headers["x-no-compression"]) return false;
       return compression.filter(req, res);
     },
+  }),
+);
+
+// Security headers via helmet. CSP is intentionally disabled here because:
+// (1) the embed routes need their own frame-ancestors policy (set below),
+// (2) the Vite dev server requires inline scripts/styles, and
+// (3) a global CSP across the existing app surface would require a broader
+// audit to enforce safely. The remaining helmet defaults (HSTS, no-sniff,
+// frame-options, referrer-policy, etc.) provide the bulk of the protection.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
   }),
 );
 
@@ -30,27 +47,39 @@ app.use((req, res, next) => {
   next();
 });
 
+// Correlation IDs + request-scoped logger. The ID is taken from an inbound
+// X-Request-Id header when present (gateway/proxy passthrough), otherwise
+// generated. It's echoed back on the response so downstream callers and end
+// users can include it in bug reports.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const inbound = req.header("x-request-id");
+  const requestId = inbound && /^[A-Za-z0-9_-]{4,128}$/.test(inbound)
+    ? inbound
+    : crypto.randomUUID();
+  (req as any).requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  (req as any).log = logger.child({
+    requestId,
+    method: req.method,
+    path: req.path,
+  });
+  next();
+});
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse && process.env.NODE_ENV !== "production") {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-      if (logLine.length > 80) logLine = logLine.slice(0, 79) + "…";
-      log(logLine);
-    }
+    if (!path.startsWith("/api") && !path.startsWith("/mcp")) return;
+    const user = (req as any).user;
+    reqLogger(req).info("http_request", {
+      statusCode: res.statusCode,
+      durationMs: duration,
+      userId: user?.id || null,
+      tenantId: user?.tenantId || null,
+    });
   });
 
   next();
@@ -77,12 +106,12 @@ function validateEnvironment() {
   return true;
 }
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+process.on("unhandledRejection", (reason) => {
+  logger.error("unhandled_rejection", serializeError(reason));
 });
 
 process.on("uncaughtException", (error) => {
-  console.error("Uncaught Exception:", error);
+  logger.error("uncaught_exception", serializeError(error));
   process.exit(1);
 });
 
@@ -104,11 +133,22 @@ process.on("uncaughtException", (error) => {
       });
     });
 
-    app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
       const status = err.status || err.statusCode || 500;
       const message = err.message || "Internal Server Error";
-      log(`Error handled: ${status} - ${message}`);
-      res.status(status).json({ message });
+      const user = (req as any).user;
+      reqLogger(req).error("http_error", {
+        statusCode: status,
+        userId: user?.id || null,
+        tenantId: user?.tenantId || null,
+        ...serializeError(err),
+      });
+      // Don't leak stack/internal messages on 5xx in production.
+      const safeMessage = status >= 500 && process.env.NODE_ENV === "production"
+        ? "Internal Server Error"
+        : message;
+      const requestId = (req as any).requestId;
+      res.status(status).json({ message: safeMessage, requestId });
     });
 
     const server = createServer(app);
@@ -145,6 +185,18 @@ process.on("uncaughtException", (error) => {
       log("✅ Support FTS objects ensured");
     } catch (ftsError: any) {
       log(`⚠️ Support FTS migration failed: ${ftsError.message}`);
+    }
+
+    // Ensure Wave 1 + Wave 3 tables exist.
+    // Idempotent and safe to run on every boot.
+    try {
+      const { ensureWave1Objects, ensureWave3Objects } = await import("./lib/wave1-migration.js");
+      await ensureWave1Objects();
+      log("✅ Wave 1 objects ensured (notifications, audit_log, scheduled_job_runs)");
+      await ensureWave3Objects();
+      log("✅ Wave 3 objects ensured (support_ticket_links, support_routing_rules)");
+    } catch (w1Error: any) {
+      log(`⚠️ Wave 1/3 migration failed: ${w1Error.message}`);
     }
 
     setupAdditionalServices(app, server, envValid).catch((error) => {

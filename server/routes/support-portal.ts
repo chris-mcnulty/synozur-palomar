@@ -343,12 +343,26 @@ export function registerSupportPortalRoutes(app: Express) {
     try {
       const tenantId = await resolveTenantId(req, (req.query.tenantId as string) || null);
       if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const query = (req.query.q as string) || undefined;
       const articles = await s.getSupportKbArticles(tenantId, {
         visibility: "public",
         published: true,
-        search: (req.query.q as string) || undefined,
+        search: query,
       });
       const limit = Math.min(Number(req.query.limit) || 50, 100);
+
+      // Record search events for deflection analytics. Anonymous, session-scoped.
+      if (query && query.trim().length >= 2) {
+        try {
+          await s.recordSupportEvent?.({
+            tenantId,
+            eventType: "kb_search",
+            sessionId: (req.query.sessionId as string) || null,
+            metadata: { q: query.slice(0, 200), resultCount: articles.length },
+          });
+        } catch { /* non-fatal */ }
+      }
+
       return res.json(articles.slice(0, limit).map((a: any) => ({
         id: a.id,
         slug: a.slug,
