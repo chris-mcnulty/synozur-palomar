@@ -99,7 +99,7 @@ export function registerSupportLinkRoutes(app: Express, deps: SupportLinksDeps) 
     // Hydrate the "other side" of each link with subject + status for the UI.
     // Single batched query instead of N point lookups.
     const otherIds = Array.from(new Set(collapsedRows.flatMap((r) => [r.ticketId, r.linkedTicketId])));
-    const otherTickets = await storage.getSupportTicketsByIds(otherIds);
+    const otherTickets = await storage.getSupportTicketsByIds(otherIds, isPlatformAdmin(user) ? undefined : ticket.tenantId);
     const ticketMap = new Map(otherTickets.map((t) => [t.id, t]));
 
     return res.json(

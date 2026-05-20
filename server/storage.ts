@@ -123,7 +123,7 @@ export interface IStorage {
     closedSince?: Date;
   }): Promise<SupportTicket[]>;
   getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
-  getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]>;
+  getSupportTicketsByIds(ids: string[], tenantId?: string): Promise<SupportTicket[]>;
   isUserMemberOfTenant(userId: string, tenantId: string): Promise<boolean>;
   createSupportTicket(ticket: InsertSupportTicket): Promise<SupportTicket>;
   updateSupportTicket(id: string, updates: Partial<InsertSupportTicket>): Promise<SupportTicket>;
@@ -648,9 +648,12 @@ export class DbStorage implements IStorage {
     return t;
   }
 
-  async getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]> {
+  async getSupportTicketsByIds(ids: string[], tenantId?: string): Promise<SupportTicket[]> {
     if (!ids.length) return [];
-    return db.select().from(supportTickets).where(inArray(supportTickets.id, ids));
+    const condition = tenantId
+      ? and(inArray(supportTickets.id, ids), eq(supportTickets.tenantId, tenantId))
+      : inArray(supportTickets.id, ids);
+    return db.select().from(supportTickets).where(condition);
   }
 
   async isUserMemberOfTenant(userId: string, tenantId: string): Promise<boolean> {

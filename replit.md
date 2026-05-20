@@ -10,6 +10,7 @@ Preferred communication style: Simple, everyday language.
 **CRITICAL**: `attached_assets/` is ONLY for temporary scratch files. NEVER store application assets (logos, images, etc.) there. All permanent assets must live in the source tree (e.g., `client/src/assets/logos/`).
 **CRITICAL FONT RULE**: The ONLY font allowed in the application is the **Avenir Next Lt Pro** family. Font files are in `client/public/fonts/`.
 **CRITICAL — TENANT DATA BOUNDARY**: Every database query that touches tenant-scoped data MUST include a `tenantId` filter derived from the server-side session (`req.user?.activeTenantId || req.user?.primaryTenantId || req.user?.tenantId`). NEVER trust a `tenantId` value supplied by the client.
+**STANDING INSTRUCTION — MERGED PRs**: After every merged PR, inspect all changed files with special attention to: (1) schema changes in `shared/schema.ts` — verify column types, nullability, defaults, and foreign keys are correct; (2) new/modified storage methods in `server/storage.ts` — verify tenantId scoping, no raw SQL injection, correct Drizzle ORM patterns; (3) run `npx drizzle-kit push` if schema changed; (4) check the app starts cleanly and the SLA watcher / agent-card-health schedulers log no errors.
 
 ## System Architecture
 
