@@ -1193,6 +1193,12 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
             if (value === "resolved") {
               updates.resolvedAt = new Date();
               updates.resolvedBy = user.id;
+            } else if (value === "closed") {
+              updates.closedAt = new Date();
+              if (!ticket.resolvedAt) {
+                updates.resolvedAt = new Date();
+                updates.resolvedBy = user.id;
+              }
             }
             auditField = "status";
             auditOld = ticket.status;

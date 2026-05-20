@@ -46,6 +46,8 @@ interface SlaBreachStorage {
   logSupportTicketActivity(entry: Partial<SupportTicketActivity> & { ticketId: string; action: string }): Promise<SupportTicketActivity>;
   createScheduledJobRun(run: Partial<ScheduledJobRun>): Promise<ScheduledJobRun>;
   updateScheduledJobRun(id: string, updates: Partial<ScheduledJobRun>): Promise<ScheduledJobRun>;
+  getLastSuccessfulScheduledJobRun(jobType: string): Promise<ScheduledJobRun | undefined>;
+  getPlatformAdminEmails(): Promise<string[]>;
 }
 
 const s = storage as unknown as SlaBreachStorage;
@@ -338,7 +340,7 @@ const STALENESS_ALERT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
 async function runHeartbeatCheck(): Promise<void> {
   try {
-    const last = await (storage as any).getLastSuccessfulScheduledJobRun?.('sla_breach_watcher');
+    const last = await s.getLastSuccessfulScheduledJobRun('sla_breach_watcher');
     if (!last) return; // First-run skip; the runner has yet to record anything.
     const ageMs = Date.now() - new Date(last.startedAt).getTime();
     const ageMin = Math.floor(ageMs / 60_000);
@@ -346,15 +348,14 @@ async function runHeartbeatCheck(): Promise<void> {
       // Cooldown so we don't spam the log every minute once stale.
       if (Date.now() - lastStalenessAlertAt < STALENESS_ALERT_COOLDOWN_MS) return;
       lastStalenessAlertAt = Date.now();
-      console.error(
-        `${TAG} STALE: SLA breach watcher hasn't completed successfully in ${ageMin}m (threshold ${HEARTBEAT_STALENESS_MIN}m). ` +
-        `Last successful run at ${last.startedAt}. ` +
-        `Investigate the scheduler — SLA escalation emails and audit entries are not being emitted.`,
+      logger.error(
+        `${TAG} STALE: SLA breach watcher hasn't completed successfully — escalation pipeline is silent`,
+        { ageMin, thresholdMin: HEARTBEAT_STALENESS_MIN, lastSuccessfulRunAt: last.startedAt },
       );
       try {
         const { getUncachableSendGridClient } = await import('../services/sendgrid-client.js');
         const { client, fromEmail } = await getUncachableSendGridClient();
-        const adminEmails = await (storage as any).getPlatformAdminEmails?.();
+        const adminEmails = await s.getPlatformAdminEmails();
         if (Array.isArray(adminEmails) && adminEmails.length > 0) {
           await client.send({
             to: adminEmails[0],
@@ -367,13 +368,11 @@ async function runHeartbeatCheck(): Promise<void> {
           });
         }
       } catch (mailErr) {
-        const msg = mailErr instanceof Error ? mailErr.message : String(mailErr);
-        console.error(`${TAG} Failed to send staleness alert email: ${msg}`);
+        logger.error(`${TAG} Failed to send staleness alert email`, serializeError(mailErr));
       }
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${TAG} Heartbeat check failed: ${msg}`);
+    logger.error(`${TAG} Heartbeat check failed`, serializeError(err));
   }
 }
 

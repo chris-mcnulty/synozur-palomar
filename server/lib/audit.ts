@@ -93,11 +93,14 @@ export async function getAuditEntries(
   resourceType: string,
   resourceId: string,
   limit = 200,
+  tenantId?: string | null,
 ): Promise<Array<typeof auditLog.$inferSelect>> {
+  const conds = [eq(auditLog.resourceType, resourceType), eq(auditLog.resourceId, resourceId)];
+  if (tenantId) conds.push(eq(auditLog.tenantId, tenantId));
   return db
     .select()
     .from(auditLog)
-    .where(and(eq(auditLog.resourceType, resourceType), eq(auditLog.resourceId, resourceId)))
+    .where(and(...conds))
     .orderBy(desc(auditLog.createdAt))
     .limit(Math.max(1, Math.min(limit, 500)));
 }

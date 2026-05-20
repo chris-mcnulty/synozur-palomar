@@ -57,10 +57,11 @@ export async function notifyUsers(userIds: Array<string | null | undefined>, inp
 
 export async function listNotificationsForUser(
   userId: string,
-  opts: { onlyUnread?: boolean; limit?: number } = {},
+  opts: { onlyUnread?: boolean; limit?: number; tenantId?: string | null } = {},
 ): Promise<Notification[]> {
   const conds = [eq(notifications.userId, userId)];
   if (opts.onlyUnread) conds.push(isNull(notifications.readAt));
+  if (opts.tenantId) conds.push(eq(notifications.tenantId, opts.tenantId));
   return db
     .select()
     .from(notifications)
@@ -69,28 +70,38 @@ export async function listNotificationsForUser(
     .limit(Math.max(1, Math.min(opts.limit ?? 50, 200)));
 }
 
-export async function countUnreadNotifications(userId: string): Promise<number> {
-  const result = await db.execute(
-    sql`SELECT COUNT(*)::int AS c FROM notifications WHERE user_id = ${userId} AND read_at IS NULL`,
-  );
-  const row: any = ((result as any).rows || result)[0];
+export async function countUnreadNotifications(userId: string, tenantId?: string | null): Promise<number> {
+  const conds = [eq(notifications.userId, userId), isNull(notifications.readAt)];
+  if (tenantId) conds.push(eq(notifications.tenantId, tenantId));
+  const [row] = await db
+    .select({ c: sql<number>`COUNT(*)::int` })
+    .from(notifications)
+    .where(and(...conds));
   return Number(row?.c || 0);
 }
 
-export async function markNotificationRead(id: string, userId: string): Promise<Notification | undefined> {
+export async function markNotificationRead(
+  id: string,
+  userId: string,
+  tenantId?: string | null,
+): Promise<Notification | undefined> {
+  const conds = [eq(notifications.id, id), eq(notifications.userId, userId)];
+  if (tenantId) conds.push(eq(notifications.tenantId, tenantId));
   const [updated] = await db
     .update(notifications)
     .set({ readAt: new Date() })
-    .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+    .where(and(...conds))
     .returning();
   return updated;
 }
 
-export async function markAllNotificationsRead(userId: string): Promise<number> {
+export async function markAllNotificationsRead(userId: string, tenantId?: string | null): Promise<number> {
+  const conds = [eq(notifications.userId, userId), isNull(notifications.readAt)];
+  if (tenantId) conds.push(eq(notifications.tenantId, tenantId));
   const updated = await db
     .update(notifications)
     .set({ readAt: new Date() })
-    .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)))
+    .where(and(...conds))
     .returning({ id: notifications.id });
   return updated.length;
 }

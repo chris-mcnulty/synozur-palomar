@@ -43,11 +43,17 @@ const linkInputSchema = z.object({
   note: z.string().max(2000).optional(),
 });
 
-/** Inverse of a link type used when bidirectional symmetry is desired. */
+/**
+ * Inverse of a link type, for asymmetric pairs where the reverse direction
+ * uses a different name (blocks ↔ blocked_by, parent_of ↔ child_of). For
+ * symmetric types (related_to) and one-way types (duplicate_of) we return
+ * null and rely on the list query's `OR ticketId = X OR linkedTicketId = X`
+ * clause + `direction` marker to surface the link from both sides.
+ */
 function inverseLinkType(t: TicketLinkType): TicketLinkType | null {
   switch (t) {
     case "duplicate_of": return null; // canonical points only one way
-    case "related_to": return "related_to";
+    case "related_to": return null;   // symmetric; store one row, render via direction
     case "blocks": return "blocked_by";
     case "blocked_by": return "blocks";
     case "parent_of": return "child_of";
@@ -76,13 +82,28 @@ export function registerSupportLinkRoutes(app: Express, deps: SupportLinksDeps) 
       .where(or(eq(supportTicketLinks.ticketId, ticket.id), eq(supportTicketLinks.linkedTicketId, ticket.id)))
       .orderBy(desc(supportTicketLinks.createdAt));
 
+    // Collapse symmetric pairs from legacy data: if both A→B and B→A exist
+    // with the same linkType (e.g. related_to), keep only the older row so
+    // the UI doesn't show duplicate "Related" entries. New writes don't
+    // produce these pairs (see inverseLinkType for symmetric types).
+    const SYMMETRIC: ReadonlySet<TicketLinkType> = new Set<TicketLinkType>(["related_to"]);
+    const seenPairs = new Set<string>();
+    const collapsedRows = rows.filter((link) => {
+      if (!SYMMETRIC.has(link.linkType as TicketLinkType)) return true;
+      const pairKey = [link.ticketId, link.linkedTicketId].sort().join("|") + "|" + link.linkType;
+      if (seenPairs.has(pairKey)) return false;
+      seenPairs.add(pairKey);
+      return true;
+    });
+
     // Hydrate the "other side" of each link with subject + status for the UI.
-    const otherIds = Array.from(new Set(rows.flatMap((r) => [r.ticketId, r.linkedTicketId])));
-    const otherTickets = await Promise.all(otherIds.map((id) => storage.getSupportTicketById(id)));
-    const ticketMap = new Map(otherTickets.filter((t): t is NonNullable<typeof t> => !!t).map((t) => [t.id, t]));
+    // Single batched query instead of N point lookups.
+    const otherIds = Array.from(new Set(collapsedRows.flatMap((r) => [r.ticketId, r.linkedTicketId])));
+    const otherTickets = await storage.getSupportTicketsByIds(otherIds);
+    const ticketMap = new Map(otherTickets.map((t) => [t.id, t]));
 
     return res.json(
-      rows.map((link) => ({
+      collapsedRows.map((link) => ({
         ...link,
         // Direction relative to the asked-about ticket so the UI can render
         // "this is a duplicate of #X" vs "Y is a duplicate of this".

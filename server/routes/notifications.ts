@@ -19,6 +19,9 @@ const listQuerySchema = z.object({
 export function registerNotificationRoutes(app: Express, deps: NotificationRouteDeps) {
   const { requireAuth } = deps;
 
+  // All notification reads/writes are scoped to the caller's active tenant.
+  // The global `users` model lets a user belong to multiple tenants, so
+  // filtering by userId alone would leak notifications across tenants.
   app.get("/api/notifications", requireAuth, async (req, res) => {
     const user = (req as any).user;
     if (!user) return res.status(401).json({ error: "Authentication required" });
@@ -29,6 +32,7 @@ export function registerNotificationRoutes(app: Express, deps: NotificationRoute
     const rows = await listNotificationsForUser(user.id, {
       onlyUnread: parsed.data.onlyUnread === "true",
       limit: parsed.data.limit,
+      tenantId: user.tenantId,
     });
     return res.json(rows);
   });
@@ -36,14 +40,14 @@ export function registerNotificationRoutes(app: Express, deps: NotificationRoute
   app.get("/api/notifications/unread-count", requireAuth, async (req, res) => {
     const user = (req as any).user;
     if (!user) return res.status(401).json({ error: "Authentication required" });
-    const count = await countUnreadNotifications(user.id);
+    const count = await countUnreadNotifications(user.id, user.tenantId);
     return res.json({ count });
   });
 
   app.post("/api/notifications/:id/read", requireAuth, async (req, res) => {
     const user = (req as any).user;
     if (!user) return res.status(401).json({ error: "Authentication required" });
-    const updated = await markNotificationRead(req.params.id, user.id);
+    const updated = await markNotificationRead(req.params.id, user.id, user.tenantId);
     if (!updated) return res.status(404).json({ error: "Not found" });
     return res.json(updated);
   });
@@ -51,7 +55,7 @@ export function registerNotificationRoutes(app: Express, deps: NotificationRoute
   app.post("/api/notifications/mark-all-read", requireAuth, async (req, res) => {
     const user = (req as any).user;
     if (!user) return res.status(401).json({ error: "Authentication required" });
-    const n = await markAllNotificationsRead(user.id);
+    const n = await markAllNotificationsRead(user.id, user.tenantId);
     return res.json({ marked: n });
   });
 }

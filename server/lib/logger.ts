@@ -58,7 +58,18 @@ function emit(level: LogLevel, msg: string, ctx: LogContext): void {
   } catch {
     line = JSON.stringify({ ts: record.ts, level, msg, _serializeError: true });
   }
-  if (line.length > 16_000) line = line.slice(0, 16_000) + '..."}';
+  // Truncating mid-line produces invalid JSON and breaks downstream parsers.
+  // Replace oversized lines with a fresh well-formed record that flags the
+  // truncation so log ingestion still works.
+  if (line.length > 16_000) {
+    line = JSON.stringify({
+      ts: record.ts,
+      level,
+      msg,
+      _truncated: true,
+      _originalLength: line.length,
+    });
+  }
   if (IS_PROD || process.env.LOG_JSON === "1") {
     if (level === "error") process.stderr.write(line + "\n");
     else process.stdout.write(line + "\n");

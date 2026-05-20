@@ -42,8 +42,8 @@ export function registerAuditRoutes(app: Express, deps: AuditRouteDeps) {
     const { resourceType, resourceId } = req.params;
     const limit = Math.max(1, Math.min(parseInt((req.query.limit as string) || "200", 10) || 200, 500));
 
-    // For support tickets, enforce tenant isolation: a tenant admin can only
-    // see audit entries for their own tenant's ticket.
+    // For support tickets, validate the resource itself belongs to the caller's
+    // tenant (so a 404 is returned for missing tickets, not just an empty list).
     if (resourceType === "support_ticket") {
       const ticket = await storage.getSupportTicketById(resourceId);
       if (!ticket) return res.status(404).json({ error: "Resource not found" });
@@ -52,7 +52,10 @@ export function registerAuditRoutes(app: Express, deps: AuditRouteDeps) {
       }
     }
 
-    const entries = await getAuditEntries(resourceType, resourceId, limit);
+    // For non-platform admins, scope the audit query to the caller's tenant
+    // so they can't pull entries for arbitrary resourceIds across tenants.
+    const scopeTenantId = isPlatformAdmin(user) ? null : user.tenantId;
+    const entries = await getAuditEntries(resourceType, resourceId, limit, scopeTenantId);
     return res.json(entries);
   });
 

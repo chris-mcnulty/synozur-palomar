@@ -122,6 +122,7 @@ export interface IStorage {
     closedSince?: Date;
   }): Promise<SupportTicket[]>;
   getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
+  getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]>;
   createSupportTicket(ticket: InsertSupportTicket): Promise<SupportTicket>;
   updateSupportTicket(id: string, updates: Partial<InsertSupportTicket>): Promise<SupportTicket>;
   getSupportTicketByPortalToken(token: string): Promise<SupportTicket | undefined>;
@@ -645,6 +646,11 @@ export class DbStorage implements IStorage {
     return t;
   }
 
+  async getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]> {
+    if (!ids.length) return [];
+    return db.select().from(supportTickets).where(inArray(supportTickets.id, ids));
+  }
+
   private async getNextTicketNumber(): Promise<number> {
     const result = await db.select({ maxNum: sql<number>`COALESCE(MAX(${supportTickets.ticketNumber}), 0)` })
       .from(supportTickets);
@@ -998,7 +1004,11 @@ export class DbStorage implements IStorage {
   // ==================== Wave 2 Dashboards ====================
   async getSlaAttainmentDashboard(tenantId: string | null, windowDays: number): Promise<any> {
     const days = Math.max(1, Math.min(Math.floor(windowDays || 30), 365));
+    // Two predicates: bare for single-table queries, alias-qualified for the
+    // joined query against `support_queues` (which also has a `tenant_id`
+    // column and would otherwise make the predicate ambiguous in SQL).
     const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+    const tenantCondT = tenantId ? sql`t.tenant_id = ${tenantId}` : sql`1=1`;
     const windowExpr = sql.raw(`interval '${days} days'`);
 
     const overall = await db.execute(sql`
@@ -1032,7 +1042,7 @@ export class DbStorage implements IStorage {
         SUM(CASE WHEN t.first_response_due_at IS NOT NULL AND t.first_response_at IS NOT NULL AND t.first_response_at <= t.first_response_due_at THEN 1 ELSE 0 END)::int AS "frOnTime",
         SUM(CASE WHEN t.resolution_due_at IS NOT NULL AND t.resolved_at IS NOT NULL AND t.resolved_at <= t.resolution_due_at THEN 1 ELSE 0 END)::int AS "resOnTime"
       FROM support_tickets t LEFT JOIN support_queues q ON q.id = t.queue_id
-      WHERE ${tenantCond} AND t.created_at >= now() - ${windowExpr}
+      WHERE ${tenantCondT} AND t.created_at >= now() - ${windowExpr}
       GROUP BY t.queue_id, q.name ORDER BY total DESC
     `);
 
@@ -1053,7 +1063,9 @@ export class DbStorage implements IStorage {
   }
 
   async getBacklogAgingDashboard(tenantId: string | null): Promise<any> {
+    // See getSlaAttainmentDashboard for why we keep two predicates.
     const tenantCond = tenantId ? sql`tenant_id = ${tenantId}` : sql`1=1`;
+    const tenantCondT = tenantId ? sql`t.tenant_id = ${tenantId}` : sql`1=1`;
     const buckets = await db.execute(sql`
       WITH base AS (
         SELECT id, queue_id, priority, EXTRACT(EPOCH FROM (now() - created_at))/86400 AS age_days
@@ -1075,7 +1087,7 @@ export class DbStorage implements IStorage {
       SELECT t.queue_id AS "queueId", q.name AS "queueName", COUNT(*)::int AS open,
         AVG(EXTRACT(EPOCH FROM (now() - t.created_at))/86400)::float AS "avgAgeDays"
       FROM support_tickets t LEFT JOIN support_queues q ON q.id = t.queue_id
-      WHERE ${tenantCond} AND t.status NOT IN ('resolved','closed','cancelled')
+      WHERE ${tenantCondT} AND t.status NOT IN ('resolved','closed','cancelled')
       GROUP BY t.queue_id, q.name ORDER BY open DESC
     `);
 

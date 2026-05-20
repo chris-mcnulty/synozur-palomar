@@ -120,8 +120,13 @@ export function registerSupportRoutingRoutes(app: Express, deps: RoutingRoutesDe
     const parsed = ruleSchema.partial().safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.errors });
 
-    // If action changes, re-validate targets against the proposed end-state.
-    if (parsed.data.action) {
+    // Re-validate targets against the merged end-state whenever any field
+    // that affects validity changes — not only `action`. Otherwise a patch
+    // like `{ targetQueueId: null }` against a `route_to_queue` rule would
+    // leave a rule that can never execute correctly.
+    const validityFields = ["action", "targetQueueId", "targetUserId", "targetPriority"] as const;
+    const touchesValidity = validityFields.some((k) => k in parsed.data);
+    if (touchesValidity) {
       const proposed = { ...existing, ...parsed.data } as any;
       const targetErr = validateActionTargets(proposed);
       if (targetErr) return res.status(400).json({ error: targetErr });
