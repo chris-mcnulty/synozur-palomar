@@ -144,12 +144,20 @@ export function registerSupportLinkRoutes(app: Express, deps: SupportLinksDeps) 
       return res.status(400).json({ error: "Cross-tenant links are not allowed" });
     }
 
-    // Insert the primary link (idempotent on the unique index).
+    // Insert the primary link (idempotent on the unique index). When the
+    // link already exists, `created` is undefined — we treat that as a
+    // no-op rather than re-running audit + side effects below, which would
+    // otherwise produce duplicate "linked" audit rows, duplicate replies,
+    // and repeat the auto-close on every re-POST.
     const [created] = await db
       .insert(supportTicketLinks)
       .values({ ticketId: ticket.id, linkedTicketId, linkType, createdBy: user.id, note: note || null })
       .onConflictDoNothing()
       .returning();
+
+    if (!created) {
+      return res.status(200).json({ created: null, note: null, idempotent: true });
+    }
 
     // Optionally insert the symmetric inverse (related/blocks/parent pairs).
     const inv = inverseLinkType(linkType);
@@ -174,7 +182,8 @@ export function registerSupportLinkRoutes(app: Express, deps: SupportLinksDeps) 
 
     // Duplicate-of: close the source ticket pointing at the canonical, and
     // add a reply with the canonical ticket number so requester / watchers
-    // know where to follow up.
+    // know where to follow up. Gated by `created` above so a re-POST after
+    // the link exists doesn't re-run these side effects.
     if (linkType === "duplicate_of" && ticket.status !== "closed" && ticket.status !== "resolved") {
       try {
         assertTransition(ticket.status as any, "resolved");
@@ -233,8 +242,8 @@ export function registerSupportLinkRoutes(app: Express, deps: SupportLinksDeps) 
       }
     }
 
-    return res.status(created ? 201 : 200).json({
-      created: created || null,
+    return res.status(201).json({
+      created,
       note: autoClosedNote,
     });
   });

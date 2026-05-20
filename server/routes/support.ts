@@ -1217,6 +1217,21 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
             break;
           }
           case "assign": {
+            if (value !== null) {
+              // Verify the target user exists and is a member of the ticket's
+              // tenant — otherwise the FK would accept a cross-tenant userId
+              // and produce wrong notifications + leak the user via joins.
+              const target = await storage.getUser(value);
+              if (!target) {
+                failed.push({ id, error: "Assignee not found" });
+                continue;
+              }
+              const inTenant = await storage.isUserMemberOfTenant(value, ticket.tenantId);
+              if (!inTenant) {
+                failed.push({ id, error: "Assignee is not a member of this tenant" });
+                continue;
+              }
+            }
             updates.assignedTo = value; // null is allowed (unassign)
             auditField = "assignedTo";
             auditOld = ticket.assignedTo;
@@ -1228,6 +1243,20 @@ export function registerSupportRoutes(app: Express, deps: SupportRouteDeps) {
             break;
           }
           case "set_queue": {
+            if (value !== null) {
+              // Verify the queue exists and belongs to this tenant — otherwise
+              // we'd accept a queue_id pointing at another tenant's queue and
+              // leak it via dashboards/list-view joins.
+              const queue = await storage.getSupportQueueById(value);
+              if (!queue) {
+                failed.push({ id, error: "Queue not found" });
+                continue;
+              }
+              if (queue.tenantId !== ticket.tenantId) {
+                failed.push({ id, error: "Queue belongs to a different tenant" });
+                continue;
+              }
+            }
             updates.queueId = value;
             auditField = "queueId";
             auditOld = ticket.queueId;

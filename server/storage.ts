@@ -1,5 +1,6 @@
 import {
   users, tenants, blockedDomains, systemSettings,
+  tenantUsers,
   groundingDocuments,
   supportQueues, supportQueueMembers, supportQueueRoundRobinState,
   supportSlaPolicies, supportKbArticles, supportAppIntegrationKeys,
@@ -123,6 +124,7 @@ export interface IStorage {
   }): Promise<SupportTicket[]>;
   getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
   getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]>;
+  isUserMemberOfTenant(userId: string, tenantId: string): Promise<boolean>;
   createSupportTicket(ticket: InsertSupportTicket): Promise<SupportTicket>;
   updateSupportTicket(id: string, updates: Partial<InsertSupportTicket>): Promise<SupportTicket>;
   getSupportTicketByPortalToken(token: string): Promise<SupportTicket | undefined>;
@@ -649,6 +651,18 @@ export class DbStorage implements IStorage {
   async getSupportTicketsByIds(ids: string[]): Promise<SupportTicket[]> {
     if (!ids.length) return [];
     return db.select().from(supportTickets).where(inArray(supportTickets.id, ids));
+  }
+
+  async isUserMemberOfTenant(userId: string, tenantId: string): Promise<boolean> {
+    const [row] = await db.select({ id: tenantUsers.id })
+      .from(tenantUsers)
+      .where(and(
+        eq(tenantUsers.userId, userId),
+        eq(tenantUsers.tenantId, tenantId),
+        eq(tenantUsers.status, 'active'),
+      ))
+      .limit(1);
+    return !!row;
   }
 
   private async getNextTicketNumber(): Promise<number> {
